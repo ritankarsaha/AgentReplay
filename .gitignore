@@ -1,0 +1,18 @@
+# Local-only project planning docs (not part of repo history)
+CLAUDE.md
+PROGRESS.md
+
+# Python
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.venv/
+dist/
+build/
+
+# Secrets — never commit real credentials. See .env.example for the
+# expected shape of each env file.
+.env
+.env.*
+!.env.example
+supabase/.temp/
