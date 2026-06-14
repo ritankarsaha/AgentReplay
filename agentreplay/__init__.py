@@ -12,6 +12,7 @@ from .exceptions import AgentReplayError, ConfigurationError
 from .exporter import DEFAULT_FLUSH_INTERVAL, DEFAULT_MAX_BATCH_SIZE, BackgroundExporter
 from .redaction import DEFAULT_PII_FIELD_NAMES, redact_fields, redact_pii
 from .span import Span
+from .tool import tool
 from .version import __version__
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "shutdown",
     "Config",
     "Span",
+    "tool",
     "AgentReplayError",
     "ConfigurationError",
     "redact_fields",

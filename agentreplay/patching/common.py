@@ -62,7 +62,7 @@ def record_span(
         span = Span(
             id=str(uuid.uuid4()),
             run_id=_state.get_run_id(),
-            parent_id=None,
+            parent_id=_state.peek_parent_span_id(),
             type="llm",
             name=name,
             input=recorded_input,

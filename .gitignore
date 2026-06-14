@@ -16,3 +16,7 @@ build/
 .env.*
 !.env.example
 supabase/.temp/
+
+.claude
+.agents
+.agents/skills
