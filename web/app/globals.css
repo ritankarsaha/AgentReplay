@@ -180,6 +180,17 @@
   background-color: var(--muted);
 }
 
+/* The span the classifier (chunk 3.6) blamed for the failure — also the
+   target of the diagnosis card's "jump to culprit span" anchor link. */
+.span-row--culprit {
+  background-color: color-mix(in srgb, var(--status-failure) 8%, transparent);
+  border-left-width: 3px;
+}
+
+.span-row--culprit:hover {
+  background-color: color-mix(in srgb, var(--status-failure) 14%, transparent);
+}
+
 .waterfall-bar {
   position: absolute;
   top: 0.5rem;

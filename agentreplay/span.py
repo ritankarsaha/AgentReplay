@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -15,7 +15,11 @@ class Span:
     type: str  # "llm" | "tool" | "node" | "checkpoint"
     name: str
     input: dict
-    output: Optional[dict]
+    # `output` is the serialized return value of arbitrary user code (e.g. a
+    # `@agentreplay.tool`-decorated function returning a list/str/int), so
+    # unlike `input`/`error` it isn't always a JSON object — matches the
+    # `output jsonb` column (CLAUDE.md §3.5), which accepts any JSON value.
+    output: Optional[Any]
     error: Optional[dict]
     started_at: datetime
     duration_ms: float

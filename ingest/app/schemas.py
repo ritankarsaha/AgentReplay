@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel
 
@@ -18,7 +18,10 @@ class SpanIn(BaseModel):
     type: str
     name: str
     input: dict
-    output: Optional[dict] = None
+    # Any JSON value, not just objects: a `@agentreplay.tool`-decorated
+    # function can return a list/str/int/etc., and `output jsonb` (§3.5)
+    # accepts any JSON.
+    output: Optional[Any] = None
     error: Optional[dict] = None
     started_at: datetime
     duration_ms: float
@@ -47,7 +50,7 @@ class SpanOut(BaseModel):
     type: str
     name: str
     input: dict
-    output: Optional[dict]
+    output: Optional[Any]
     error: Optional[dict]
     started_at: datetime
     duration_ms: float
@@ -65,6 +68,8 @@ class RunOut(BaseModel):
     failure_class: Optional[str]
     root_span_id: Optional[str]
     metadata: dict
+    classification_status: str
+    diagnosis: Optional[dict] = None
 
 
 class RunDetailOut(RunOut):
@@ -103,6 +108,8 @@ def run_to_out(run: Run) -> RunOut:
         failure_class=run.failure_class,
         root_span_id=run.root_span_id,
         metadata=run.extra_metadata,
+        classification_status=run.classification_status,
+        diagnosis=run.diagnosis,
     )
 
 

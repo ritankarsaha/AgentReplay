@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import DateTime, Float, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -42,6 +42,22 @@ class Run(Base):
     extra_metadata: Mapped[dict] = mapped_column(
         "metadata", JSONVariant, nullable=False, default=dict, server_default="{}"
     )
+
+    # Chunk 3.6 — Sonnet/MAST classifier (CLAUDE.md §3.6). `failure_class`/
+    # `root_span_id` above double as the classifier's output fields too (it
+    # overwrites them with its own verdict); `classification_status`/
+    # `diagnosis` are additive. `classification_status` is one of
+    # "none" (default, not classified — either not a failure, or a failure
+    # not yet picked up by a worker), "done", or "error" — see
+    # `app/classifier.py`. `diagnosis` is the full classifier output blob
+    # (human-readable text, suggested assertion, model/backend used,
+    # timestamp; or the error message on failure) — see that module's
+    # docstring for the exact shape.
+    classification_status: Mapped[str] = mapped_column(
+        String, nullable=False, default="none", server_default="none"
+    )
+    diagnosis: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     spans: Mapped[list["SpanModel"]] = relationship(
@@ -60,7 +76,8 @@ class SpanModel(Base):
     type: Mapped[str] = mapped_column(String, nullable=False)  # llm | tool | node | checkpoint
     name: Mapped[str] = mapped_column(String, nullable=False)
     input: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
-    output: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
+    # Any JSON value (object/array/scalar) — see SpanIn.output in schemas.py.
+    output: Mapped[Optional[Any]] = mapped_column(JSONVariant, nullable=True)
     error: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_ms: Mapped[float] = mapped_column(Float, nullable=False)

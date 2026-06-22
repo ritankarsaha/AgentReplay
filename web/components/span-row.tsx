@@ -1,3 +1,5 @@
+import { Crosshair } from "lucide-react";
+
 import { ErrorBanner } from "@/components/error-banner";
 import { JsonViewer } from "@/components/json-viewer";
 import { SpanTypeBadge } from "@/components/span-type-badge";
@@ -25,32 +27,45 @@ export function SpanRow({
   node,
   bounds,
   index,
+  isCulprit = false,
 }: {
   node: SpanNode;
   bounds: TimeBounds;
   index: number;
+  /** Highlighted as the span the classifier (chunk 3.6) blamed for the failure. */
+  isCulprit?: boolean;
 }) {
   const { span, depth } = node;
   const color = SPAN_TYPE_COLORS[span.type];
   const { offsetPct, widthPct } = timelinePosition(span, bounds);
-  const rowTint = index % 2 === 1 ? "bg-white/[0.02]" : "";
+  const rowTint = isCulprit ? "" : index % 2 === 1 ? "bg-white/[0.02]" : "";
   const showDetails = Boolean(span.error) || hasContent(span.input) || hasContent(span.output);
 
   return (
     <div className="contents">
       <div
-        className={`span-row__label ${rowTint}`}
+        id={`span-${span.id}`}
+        className={`span-row__label ${rowTint} ${isCulprit ? "span-row--culprit" : ""}`}
         style={{
           paddingLeft: `${Math.min(depth, MAX_INDENT_DEPTH) * INDENT_PX + 12}px`,
-          borderLeftColor: color,
+          borderLeftColor: isCulprit ? "var(--status-failure)" : color,
         }}
       >
         <SpanTypeBadge type={span.type} />
         <span className="span-row__name">{span.name}</span>
+        {isCulprit && (
+          <span
+            className="flex items-center gap-1 font-mono text-xs text-status-failure"
+            title="Span the classifier identified as the culprit"
+          >
+            <Crosshair className="size-3" />
+            culprit
+          </span>
+        )}
         <span className="span-row__meta">{formatDuration(span.duration_ms)}</span>
       </div>
 
-      <div className={`span-row__track ${rowTint}`}>
+      <div className={`span-row__track ${rowTint} ${isCulprit ? "span-row--culprit" : ""}`}>
         <div
           className="waterfall-bar"
           style={{ left: `${offsetPct}%`, width: `${widthPct}%`, backgroundColor: color }}

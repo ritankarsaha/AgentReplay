@@ -2,6 +2,7 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { DiagnosisCard } from "@/components/diagnosis-card";
 import { RunHeader } from "@/components/run-header";
 import { RunStats } from "@/components/run-stats";
 import { SpanTimeline } from "@/components/span-timeline";
@@ -19,6 +20,7 @@ export default async function RunDetailPage({
   if (!run) notFound();
 
   const tree = buildSpanTree(run.spans);
+  const culpritSpanId = run.diagnosis?.culprit_span_id ?? run.root_span_id;
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-6 py-10">
@@ -32,8 +34,9 @@ export default async function RunDetailPage({
         </Link>
       </div>
       <RunHeader run={run} />
+      {run.status === "failure" && <DiagnosisCard run={run} />}
       <RunStats spans={run.spans} />
-      <SpanTimeline nodes={tree} spans={run.spans} />
+      <SpanTimeline nodes={tree} spans={run.spans} culpritSpanId={culpritSpanId} />
     </main>
   );
 }

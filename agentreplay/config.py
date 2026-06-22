@@ -18,3 +18,4 @@ class Config:
     redact: Optional[RedactFn] = None
     agent_version: Optional[str] = None
     framework: Optional[str] = None
+    capture_nondeterminism: bool = False

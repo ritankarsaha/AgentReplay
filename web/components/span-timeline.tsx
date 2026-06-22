@@ -5,7 +5,16 @@ import type { SpanOut } from "@/lib/api";
 import { computeTimeBounds } from "@/lib/span-timing";
 import { flattenSpanTree, type SpanNode } from "@/lib/span-tree";
 
-export function SpanTimeline({ nodes, spans }: { nodes: SpanNode[]; spans: SpanOut[] }) {
+export function SpanTimeline({
+  nodes,
+  spans,
+  culpritSpanId,
+}: {
+  nodes: SpanNode[];
+  spans: SpanOut[];
+  /** The span the classifier (chunk 3.6) blamed for the failure, if any — highlighted in the row. */
+  culpritSpanId?: string | null;
+}) {
   if (nodes.length === 0) {
     return (
       <EmptyState
@@ -23,7 +32,13 @@ export function SpanTimeline({ nodes, spans }: { nodes: SpanNode[]; spans: SpanO
       <div className="span-timeline-grid">
         <TimelineRuler bounds={bounds} />
         {flat.map((node, index) => (
-          <SpanRow key={node.span.id} node={node} bounds={bounds} index={index} />
+          <SpanRow
+            key={node.span.id}
+            node={node}
+            bounds={bounds}
+            index={index}
+            isCulprit={culpritSpanId != null && node.span.id === culpritSpanId}
+          />
         ))}
       </div>
     </div>

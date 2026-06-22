@@ -5,11 +5,13 @@ import subprocess
 import uuid
 from typing import List, Optional
 
-from . import _state, patching
+from . import _state, nondeterminism, patching
+from .checkpoint import checkpoint
 from .collector import get_collector
 from .config import DEFAULT_ENDPOINT, Config, RedactFn
 from .exceptions import AgentReplayError, ConfigurationError
 from .exporter import DEFAULT_FLUSH_INTERVAL, DEFAULT_MAX_BATCH_SIZE, BackgroundExporter
+from .fail import fail, track
 from .redaction import DEFAULT_PII_FIELD_NAMES, redact_fields, redact_pii
 from .span import Span
 from .tool import tool
@@ -26,6 +28,9 @@ __all__ = [
     "Config",
     "Span",
     "tool",
+    "checkpoint",
+    "fail",
+    "track",
     "AgentReplayError",
     "ConfigurationError",
     "redact_fields",
@@ -68,19 +73,26 @@ def init(
     max_batch_size: int = DEFAULT_MAX_BATCH_SIZE,
     agent_version: Optional[str] = None,
     framework: Optional[str] = None,
+    capture_nondeterminism: Optional[bool] = None,
 ) -> Config:
     """Initialize the AgentReplay SDK.
 
     Explicit arguments take precedence over the AGENTREPLAY_API_KEY,
     AGENTREPLAY_PROJECT_ID, AGENTREPLAY_ENDPOINT, AGENTREPLAY_ENVIRONMENT,
-    AGENTREPLAY_AGENT_VERSION, and AGENTREPLAY_FRAMEWORK environment
-    variables. Pass enabled=False to run in local no-op mode without
-    credentials (e.g. tests/CI).
+    AGENTREPLAY_AGENT_VERSION, AGENTREPLAY_FRAMEWORK, and
+    AGENTREPLAY_CAPTURE_NONDETERMINISM environment variables. Pass
+    enabled=False to run in local no-op mode without credentials (e.g.
+    tests/CI).
 
     `agent_version`/`framework` populate `runs.agent_version`/`runs.framework`
     (CLAUDE.md §3.4 "Run metadata") for every span sent by this process. If
     `agent_version` isn't given (directly or via env var), it defaults to the
     current git SHA (best-effort, None if unavailable).
+
+    `capture_nondeterminism` (default False, opt-in) monkeypatches
+    `time`/`random`/`os.environ.get` to record each call as a
+    `type="checkpoint"` span (CLAUDE.md §3.1#4) — see `agentreplay.nondeterminism`
+    for what's captured and why it's off by default.
 
     When enabled, starts a background thread that batches recorded spans
     and POSTs them to `endpoint` every `flush_interval` seconds (or sooner,
@@ -96,6 +108,11 @@ def init(
         agent_version or os.environ.get("AGENTREPLAY_AGENT_VERSION") or _detect_git_sha()
     )
     resolved_framework = framework or os.environ.get("AGENTREPLAY_FRAMEWORK")
+    resolved_capture_nondeterminism = (
+        capture_nondeterminism
+        if capture_nondeterminism is not None
+        else os.environ.get("AGENTREPLAY_CAPTURE_NONDETERMINISM", "").lower() in ("1", "true", "yes")
+    )
 
     if enabled and (not resolved_api_key or not resolved_project_id):
         raise ConfigurationError(
@@ -113,10 +130,16 @@ def init(
         redact=redact,
         agent_version=resolved_agent_version,
         framework=resolved_framework,
+        capture_nondeterminism=resolved_capture_nondeterminism,
     )
     _state.set_config(config)
     _state.set_run_id(str(uuid.uuid4()))
     patching.patch_all()
+
+    if config.enabled and config.capture_nondeterminism:
+        nondeterminism.patch_nondeterminism()
+    else:
+        nondeterminism.unpatch_nondeterminism()
 
     existing_exporter = _state.get_exporter()
     if existing_exporter is not None:

@@ -1,3 +1,4 @@
+import { AlertTriangle, Hourglass } from "lucide-react";
 import Link from "next/link";
 
 import {
@@ -11,6 +12,26 @@ import {
 import { RelativeTime } from "@/components/relative-time";
 import { StatusBadge } from "@/components/status-badge";
 import type { RunOut } from "@/lib/api";
+
+/** Small inline cue (chunk 3.7) for the in-between classifier states — "done" just shows the failure_class text itself. */
+function ClassificationHint({ run }: { run: RunOut }) {
+  if (run.status !== "failure") return null;
+  if (run.classification_status === "error") {
+    return (
+      <span title="Classifier error">
+        <AlertTriangle className="size-3.5 text-status-failure" />
+      </span>
+    );
+  }
+  if (run.classification_status === "none") {
+    return (
+      <span title="Not classified yet">
+        <Hourglass className="size-3.5 text-muted-foreground" />
+      </span>
+    );
+  }
+  return null;
+}
 
 export function RunsTable({ runs }: { runs: RunOut[] }) {
   return (
@@ -56,7 +77,10 @@ export function RunsTable({ runs }: { runs: RunOut[] }) {
                   : "font-mono text-sm text-muted-foreground"
               }
             >
-              {run.failure_class ?? "—"}
+              <span className="inline-flex items-center gap-1.5">
+                <ClassificationHint run={run} />
+                {run.failure_class ?? "—"}
+              </span>
             </TableCell>
           </TableRow>
         ))}

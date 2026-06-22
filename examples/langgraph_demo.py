@@ -39,7 +39,21 @@ CANDIDATE_MODELS = [
 class State(TypedDict):
     job_posting: str
     keywords: str
+    keyword_list: list[str]
     bullet: str
+
+
+@agentreplay.tool
+def parse_keyword_list(keywords_text: str) -> list[str]:
+    """Turn the LLM's free-text keyword list into a clean list of strings.
+
+    A `@agentreplay.tool`-decorated function (chunk 2.5) called from inside
+    the `extract_keywords` node below, so its `type="tool"` span is recorded
+    nested under that node's `type="node"` span (CLAUDE.md Day 2 checkpoint:
+    node -> tool timeline).
+    """
+    lines = [line.strip(" -*0123456789.") for line in keywords_text.splitlines()]
+    return [line for line in lines if line]
 
 
 def _chat(client: openai.OpenAI, prompt: str) -> str:
@@ -65,7 +79,8 @@ def extract_keywords(state: State) -> dict:
         "List the top 5 technical keywords a resume should target for this "
         f"job posting:\n\n{state['job_posting']}",
     )
-    return {"keywords": keywords}
+    keyword_list = parse_keyword_list(keywords)
+    return {"keywords": keywords, "keyword_list": keyword_list}
 
 
 def rewrite_bullet(state: State) -> dict:
@@ -101,6 +116,7 @@ def main() -> None:
             "track record of mentoring engineers."
         ),
         "keywords": "",
+        "keyword_list": [],
         "bullet": "Worked on the backend team and helped improve system reliability.",
     }
 
@@ -108,6 +124,8 @@ def main() -> None:
 
     print("\n--- Extracted keywords ---")
     print(result["keywords"])
+    print("\n--- Parsed keyword list ---")
+    print(result["keyword_list"])
     print("\n--- Rewritten bullet ---")
     print(result["bullet"])
 

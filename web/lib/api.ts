@@ -7,6 +7,31 @@
 export type RunStatus = "ok" | "failure" | "divergence";
 export type SpanType = "llm" | "tool" | "node" | "checkpoint";
 
+// Chunk 3.6 (Sonnet/MAST classifier). "none" = not classified yet (either
+// not a failure, or a failure not yet picked up by a Celery worker) —
+// distinct from "done"/"error" so the UI can show a "classifying…" state.
+export type ClassificationStatus = "none" | "done" | "error";
+
+export interface SuggestedAssertion {
+  type: "exact" | "structural" | "semantic";
+  description: string;
+}
+
+// The full `runs.diagnosis` JSONB blob (`ingest/app/classifier.py`). On a
+// successful classification every field through `classified_at` is
+// present; on a classifier error only `error`/`backend`/`attempted_at` are.
+export interface Diagnosis {
+  failure_class?: string;
+  culprit_span_id?: string | null;
+  text?: string;
+  suggested_assertion?: SuggestedAssertion;
+  model?: string;
+  backend?: string;
+  classified_at?: string;
+  error?: string;
+  attempted_at?: string;
+}
+
 export interface RunOut {
   id: string;
   project_id: string;
@@ -18,6 +43,8 @@ export interface RunOut {
   failure_class: string | null;
   root_span_id: string | null;
   metadata: Record<string, unknown>;
+  classification_status: ClassificationStatus;
+  diagnosis: Diagnosis | null;
 }
 
 export interface SpanOut {
@@ -27,7 +54,10 @@ export interface SpanOut {
   type: SpanType;
   name: string;
   input: Record<string, unknown>;
-  output: Record<string, unknown> | null;
+  // Any JSON value: a `@agentreplay.tool`-decorated function can return a
+  // list/string/number/etc., not just an object (mirrors SpanOut.output in
+  // ingest/app/schemas.py).
+  output: unknown;
   error: { type: string; message: string } | null;
   started_at: string;
   duration_ms: number;

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
+import random
+import time
+
 import httpx
 import pytest
 
-from agentreplay import _state, exporter
+from agentreplay import _state, exporter, nondeterminism
 from agentreplay.collector import get_collector
 from agentreplay.patching import anthropic_patch, openai_patch, responses_patch
 
@@ -58,6 +62,19 @@ def _agentreplay_clean_state(monkeypatch):
     anthropic_patch._patched = False
     openai_patch._patched = False
     responses_patch._patched = False
+
+    # Save pristine time/random/os.environ.get in case a test enables
+    # capture_nondeterminism (chunk "env/time/random capture").
+    nondeterminism_pristine = {
+        ("time", fn): getattr(time, fn) for fn in nondeterminism._TIME_FUNCS
+    }
+    nondeterminism_pristine.update(
+        {("random", fn): getattr(random, fn) for fn in nondeterminism._RANDOM_FUNCS}
+    )
+    nondeterminism_pristine[("random", "shuffle")] = random.shuffle
+    nondeterminism_pristine[("os.environ", "get")] = os.environ.get
+    nondeterminism._patched = False
+
     monkeypatch.setattr(
         exporter,
         "_build_client",
@@ -83,5 +100,14 @@ def _agentreplay_clean_state(monkeypatch):
     anthropic_patch._patched = False
     openai_patch._patched = False
     responses_patch._patched = False
+
+    for fn in nondeterminism._TIME_FUNCS:
+        setattr(time, fn, nondeterminism_pristine[("time", fn)])
+    for fn in nondeterminism._RANDOM_FUNCS:
+        setattr(random, fn, nondeterminism_pristine[("random", fn)])
+    random.shuffle = nondeterminism_pristine[("random", "shuffle")]
+    os.environ.get = nondeterminism_pristine[("os.environ", "get")]
+    nondeterminism._patched = False
+
     _state.reset()
     get_collector().clear()

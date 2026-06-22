@@ -16,20 +16,28 @@ While a node is executing, its span id is pushed onto `_state`'s per-thread
 parent stack, so LLM spans recorded via Layer 1 patching (1.2/1.3) and tool
 spans (Layer 3, chunk 2.5) recorded on the same thread automatically nest
 under that node — giving the node -> LLM -> tool timeline from CLAUDE.md's
-Day 2 checkpoint.
+Day 2 checkpoint. This works identically for `graph.invoke()`,
+`graph.ainvoke()`, and `graph.astream()` (`run_inline = True` below is what
+makes the async cases work — see its docstring).
 
 Known limitation: nesting is tracked via a per-thread stack, not LangChain's
-`run_id`/`parent_run_id` chain. This is correct for the common synchronous
-and thread-pool-parallel cases, but concurrent nodes interleaved on a single
-thread (e.g. `asyncio.gather` inside one event loop) can attribute an LLM
-call to the wrong sibling node. Acceptable for v1 — revisit if it shows up
-in practice (CLAUDE.md §9 "dogfood before claiming deterministic").
+`run_id`/`parent_run_id` chain. This is correct for the common synchronous,
+sequential-async, and thread-pool-parallel cases (all covered by
+`tests/test_langgraph_adapter.py`, including `ainvoke`/`astream`), but
+multiple LangGraph nodes running as concurrent `asyncio.Task`s on the SAME
+thread (e.g. parallel branches awaited via `asyncio.gather` inside one event
+loop) share one `threading.local` stack across tasks, so an LLM call in one
+task can interleave with another task's push/pop and attribute to the wrong
+sibling node. Fixing this properly needs a `contextvars.ContextVar`-based
+stack (isolated per-Task) instead of `threading.local` — deferred until
+dogfooding (§9) surfaces it with a concurrent-node graph.
 """
 
 from __future__ import annotations
 
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -52,6 +60,18 @@ else:
 
 class AgentReplayCallbackHandler(BaseCallbackHandler):  # type: ignore[misc]
     """Records one `type="node"` span per LangGraph node enter/exit."""
+
+    # By default, `BaseCallbackHandler.run_inline = False` makes LangChain's
+    # async callback manager dispatch our (sync) on_chain_start/on_chain_end
+    # to a thread-pool executor — a DIFFERENT thread than the one running
+    # the (async) node body. Since `_state`'s parent-span stack (chunk 2.1)
+    # is per-thread, that desyncs push/peek: an LLM call inside an `async
+    # def` node would see an empty stack and record `parent_id=None` instead
+    # of nesting under the node span. `run_inline = True` forces the
+    # callback manager to invoke our handler inline on the node's own
+    # thread/task, keeping push/peek on the same per-thread stack for both
+    # `graph.invoke()` and `graph.ainvoke()`/`astream()`.
+    run_inline = True
 
     def __init__(self) -> None:
         if _IMPORT_ERROR is not None:
@@ -167,3 +187,91 @@ class AgentReplayCallbackHandler(BaseCallbackHandler):  # type: ignore[misc]
         except Exception:
             # Recording must never break the host application.
             print(f"agentreplay: failed to record node span ({start['name']})", file=sys.stderr)
+
+
+def _record_checkpoint_span(config: Dict[str, Any], checkpoint: Dict[str, Any], metadata: Dict[str, Any]) -> None:
+    if not _state.is_initialized() or not _state.get_config().enabled:
+        return
+
+    try:
+        agentreplay_config = _state.get_config()
+        thread_id = (config.get("configurable") or {}).get("thread_id")
+
+        recorded_input: Dict[str, Any] = {
+            "thread_id": thread_id,
+            "step": metadata.get("step"),
+            "source": metadata.get("source"),
+        }
+        recorded_output = safe_serialize(checkpoint.get("channel_values", {}))
+
+        if agentreplay_config.redact is not None:
+            recorded_input = agentreplay_config.redact(recorded_input)
+            recorded_output = agentreplay_config.redact(recorded_output)
+
+        fingerprint = compute_fingerprint(
+            {"langgraph_checkpoint": checkpoint.get("id"), "thread_id": thread_id}
+        )
+
+        span = Span(
+            id=str(uuid.uuid4()),
+            run_id=_state.get_run_id(),
+            parent_id=_state.peek_parent_span_id(),
+            type="checkpoint",
+            name="langgraph.checkpoint",
+            input=recorded_input,
+            output=recorded_output,
+            error=None,
+            started_at=datetime.now(timezone.utc),
+            duration_ms=0.0,
+            fingerprint=fingerprint,
+        )
+        get_collector().add(span)
+    except Exception:
+        # Recording must never break the host application.
+        print("agentreplay: failed to record langgraph checkpoint span", file=sys.stderr)
+
+
+def wrap_checkpointer(checkpointer: Any) -> Any:
+    """Wrap a LangGraph `BaseCheckpointSaver` so every `put`/`aput` also
+    records a `type="checkpoint"` span (CLAUDE.md §3.1/§3.3 "checkpointer
+    wrapper").
+
+    Unlike `AgentReplayCallbackHandler`'s per-node `type="node"` spans (which
+    record each node's input/output slice), this records the FULL graph
+    state (`checkpoint["channel_values"]`) as persisted after each superstep
+    — the snapshot LangGraph itself uses to resume/replay a thread.
+
+    Works by wrapping the checkpointer instance's `put`/`aput` bound methods
+    in place (no subclassing needed, works for any `BaseCheckpointSaver`
+    implementation: `MemorySaver`, `SqliteSaver`, `PostgresSaver`, ...).
+    Returns the same instance for convenient chaining::
+
+        checkpointer = wrap_checkpointer(MemorySaver())
+        graph = builder.compile(checkpointer=checkpointer)
+        graph.invoke(state, config={
+            "configurable": {"thread_id": "1"},
+            "callbacks": [AgentReplayCallbackHandler()],
+        })
+    """
+    if not callable(getattr(checkpointer, "put", None)) or not callable(getattr(checkpointer, "aput", None)):
+        raise ConfigurationError(
+            "wrap_checkpointer() expects a LangGraph BaseCheckpointSaver "
+            "(an object with put()/aput() methods)."
+        )
+
+    original_put = checkpointer.put
+    original_aput = checkpointer.aput
+
+    def wrapped_put(config: Dict[str, Any], checkpoint: Dict[str, Any], metadata: Dict[str, Any], new_versions: Any) -> Any:
+        result = original_put(config, checkpoint, metadata, new_versions)
+        _record_checkpoint_span(config, checkpoint, metadata)
+        return result
+
+    async def wrapped_aput(config: Dict[str, Any], checkpoint: Dict[str, Any], metadata: Dict[str, Any], new_versions: Any) -> Any:
+        result = await original_aput(config, checkpoint, metadata, new_versions)
+        _record_checkpoint_span(config, checkpoint, metadata)
+        return result
+
+    checkpointer.put = wrapped_put  # type: ignore[method-assign]
+    checkpointer.aput = wrapped_aput  # type: ignore[method-assign]
+    return checkpointer
