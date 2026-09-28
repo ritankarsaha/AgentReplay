@@ -259,3 +259,37 @@ def test_tool_replay_works_without_init():
 
     with replay_mode([span]):
         assert echo("x") == "recorded"
+
+
+def test_tool_replay_reconstructs_tuple_output_not_a_list():
+    @agentreplay.tool
+    def coordinates():
+        return (99, 99)  # never reached -- replay serves the recording
+
+    fp = _tool_fingerprint(coordinates.__qualname__, (), {})
+    span = _tool_span(
+        coordinates.__qualname__,
+        0,
+        fp,
+        output={"__agentreplay_type__": "tuple", "value": [1, 2]},
+    )
+
+    with replay_mode([span]):
+        result = coordinates()
+        assert result == (1, 2)
+        assert isinstance(result, tuple)
+
+
+def test_tool_replay_legacy_untyped_output_still_returns_plain_list():
+
+    @agentreplay.tool
+    def coordinates():
+        return (99, 99)
+
+    fp = _tool_fingerprint(coordinates.__qualname__, (), {})
+    span = _tool_span(coordinates.__qualname__, 0, fp, output=[1, 2])
+
+    with replay_mode([span]):
+        result = coordinates()
+        assert result == [1, 2]
+        assert isinstance(result, list)

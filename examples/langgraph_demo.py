@@ -16,7 +16,7 @@ Usage (from repo root):
 from __future__ import annotations
 
 import os
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 import openai
 from dotenv import load_dotenv
@@ -103,22 +103,30 @@ def build_graph():
     return builder.compile()
 
 
-def main() -> None:
+def main(initial_state: Optional[State] = None) -> dict:
+    """Run the graph. `initial_state` is optional (CLAUDE.md §4 chunk 4.2's
+    "recorded input" convention, PROGRESS.md "4.1": an entrypoint opts in to
+    receiving the recorded input from a generated regression test just by
+    declaring a parameter for it) — defaults to the original hardcoded demo
+    scenario when omitted, so `main()` with no arguments behaves exactly as
+    it always has.
+    """
     agentreplay.init(framework="langgraph")
     print("run_id:", agentreplay.get_run_id())
 
     graph = build_graph()
-    initial_state: State = {
-        "job_posting": (
-            "We're hiring a Senior Backend Engineer to build and scale our "
-            "event-driven payments platform. Must have deep experience with "
-            "distributed systems, Python, Kafka, and PostgreSQL, plus a "
-            "track record of mentoring engineers."
-        ),
-        "keywords": "",
-        "keyword_list": [],
-        "bullet": "Worked on the backend team and helped improve system reliability.",
-    }
+    if initial_state is None:
+        initial_state = {
+            "job_posting": (
+                "We're hiring a Senior Backend Engineer to build and scale our "
+                "event-driven payments platform. Must have deep experience with "
+                "distributed systems, Python, Kafka, and PostgreSQL, plus a "
+                "track record of mentoring engineers."
+            ),
+            "keywords": "",
+            "keyword_list": [],
+            "bullet": "Worked on the backend team and helped improve system reliability.",
+        }
 
     result = graph.invoke(initial_state, config={"callbacks": [AgentReplayCallbackHandler()]})
 
@@ -131,6 +139,7 @@ def main() -> None:
 
     agentreplay.flush()
     agentreplay.shutdown()
+    return result
 
 
 if __name__ == "__main__":

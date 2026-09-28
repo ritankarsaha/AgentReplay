@@ -25,7 +25,14 @@ calls.
 from __future__ import annotations
 
 from ..diff import FieldDiff, diff_payloads, format_diff
-from .client import ReplaySession, is_active, patch_for_replay, replay_mode, unpatch_replay
+from .client import (
+    ReplaySession,
+    is_active,
+    mock_tools_mode,
+    patch_for_replay,
+    replay_mode,
+    unpatch_replay,
+)
 from .exceptions import ReplayDivergence, ReplayedError, ReplayError, TraceFetchError
 from .loader import fetch_run, load_run_from_file
 from .runner import ReplayResult, replay_run, replay_run_from_file, resolve_entrypoint
@@ -33,6 +40,7 @@ from .store import CallSiteQueue, RecordedCall, RecordedRun
 
 __all__ = [
     "replay_mode",
+    "mock_tools_mode",
     "patch_for_replay",
     "unpatch_replay",
     "is_active",

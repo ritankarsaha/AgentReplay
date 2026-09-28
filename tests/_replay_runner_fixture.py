@@ -29,3 +29,14 @@ def main() -> str:
 
 def boom() -> None:
     raise RuntimeError("entrypoint exploded")
+
+
+async def async_main() -> str:
+    agentreplay.init(api_key="key", project_id="proj")
+    client = anthropic.Anthropic(api_key="sk-fake")
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    return response.content[0].text

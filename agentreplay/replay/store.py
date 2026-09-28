@@ -12,7 +12,7 @@ means the call site is exhausted (or was never recorded) — the caller
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from ..fingerprint import compute_fingerprint
 
@@ -57,6 +57,12 @@ class CallSiteQueue:
 
     def remaining(self) -> int:
         return sum(1 for call in self._calls if not call.consumed)
+
+    def consumed_count(self) -> int:
+        return sum(1 for call in self._calls if call.consumed)
+
+    def any_consumed(self) -> bool:
+        return any(call.consumed for call in self._calls)
 
     def last_request(self) -> Optional[dict]:
         """The most recently recorded call's `input` (chunk 3.3's diff reference point).
@@ -136,3 +142,11 @@ class RecordedRun:
 
     def remaining_count(self) -> int:
         return sum(queue.remaining() for queue in self._queues.values())
+
+    def consumed_count(self) -> int:
+
+        return sum(queue.consumed_count() for queue in self._queues.values())
+
+    def called_sites(self) -> Set[str]:
+
+        return {name for name, queue in self._queues.items() if queue.any_consumed()}

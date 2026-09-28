@@ -85,3 +85,25 @@ class SpanModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     run: Mapped["Run"] = relationship(back_populates="spans")
+
+
+class LoginEvent(Base):
+    """One viewer Google sign-in (`web/auth.ts`'s `events.signIn`).
+
+    Written by the Next.js viewer, not the SDK -- unrelated to `runs`/
+    `spans`. Exists because the viewer's Auth.js config uses JWT-only
+    sessions (no database adapter), so without this there is no durable
+    record anywhere of who has signed in.
+    """
+
+    __tablename__ = "login_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    email: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    image: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )

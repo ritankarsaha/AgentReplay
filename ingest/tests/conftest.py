@@ -3,13 +3,21 @@ from __future__ import annotations
 from typing import AsyncIterator
 
 import httpx
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.config import Settings
 from app.db import Base, get_db, make_session_factory
 from app.main import app
 from app.models import Project
+
+
+@pytest.fixture(autouse=True)
+def _isolate_settings_from_real_env_file(monkeypatch):
+
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
 
 TEST_API_KEY = "test-api-key"
 TEST_PROJECT_ID = "test-project"

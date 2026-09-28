@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { DiagnosisCard } from "@/components/diagnosis-card";
+import { GenerateTestCard } from "@/components/generate-test-card";
 import { RunHeader } from "@/components/run-header";
 import { RunStats } from "@/components/run-stats";
 import { SpanTimeline } from "@/components/span-timeline";
@@ -35,6 +36,7 @@ export default async function RunDetailPage({
       </div>
       <RunHeader run={run} />
       {run.status === "failure" && <DiagnosisCard run={run} />}
+      {run.status === "failure" && <GenerateTestCard runId={run.id} />}
       <RunStats spans={run.spans} />
       <SpanTimeline nodes={tree} spans={run.spans} culpritSpanId={culpritSpanId} />
     </main>

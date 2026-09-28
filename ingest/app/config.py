@@ -15,6 +15,7 @@ DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 # CLASSIFIER ONLY (3.6)".
 DEFAULT_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 DEFAULT_NIM_MODEL = "meta/llama-3.1-70b-instruct"
+DEFAULT_ASSERTION_SPEC_NIM_MODEL = "meta/llama-3.1-8b-instruct"
 
 # Resolve relative to this file (ingest/app/config.py -> ingest/.env) so
 # Settings() works regardless of the process's current working directory.
@@ -58,6 +59,11 @@ class Settings(BaseSettings):
     nim_base_url: str = DEFAULT_NIM_BASE_URL
     nim_model: str = DEFAULT_NIM_MODEL
 
+
+    assertion_spec_backend: str = "anthropic"
+    assertion_spec_nim_api_key: Optional[str] = None
+    assertion_spec_nim_model: str = DEFAULT_ASSERTION_SPEC_NIM_MODEL
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -73,6 +79,13 @@ class Settings(BaseSettings):
         """
         if self.classifier_backend == "nim":
             return bool(self.nim_api_key)
+        return bool(self.anthropic_api_key)
+
+    @property
+    def assertion_spec_configured(self) -> bool:
+        """Whether enough config exists to actually generate an assertion spec."""
+        if self.assertion_spec_backend == "nim":
+            return bool(self.assertion_spec_nim_api_key)
         return bool(self.anthropic_api_key)
 
 

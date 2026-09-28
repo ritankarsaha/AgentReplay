@@ -290,3 +290,47 @@
 .json-viewer .json-null {
   color: var(--span-llm);
 }
+
+.code-viewer summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  padding: 0.125rem 0;
+  user-select: none;
+}
+
+.code-viewer summary:hover {
+  color: var(--foreground);
+}
+
+.code-viewer summary > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.code-viewer summary > .code-viewer__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.code-viewer pre {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--foreground);
+  background-color: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.625rem;
+  margin-top: 0.25rem;
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre;
+}

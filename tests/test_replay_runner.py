@@ -124,6 +124,24 @@ def test_replay_run_fetches_trace_and_calls_entrypoint(monkeypatch):
     assert agentreplay.init is original_init
 
 
+def test_replay_run_awaits_an_async_entrypoint(monkeypatch):
+
+    span = _recorded_anthropic_span(_REQUEST_PAYLOAD, _RECORDED_OUTPUT)
+    monkeypatch.setattr(
+        runner_module, "fetch_run", lambda *a, **kw: {"id": "run-123", "spans": [span]}
+    )
+
+    result = replay_run(
+        "run-123",
+        "_replay_runner_fixture:async_main",
+        endpoint="http://localhost:8000",
+        api_key="test-key",
+    )
+
+    assert result.entrypoint_result == "replayed hello"
+    assert result.session.remaining_count() == 0
+
+
 def test_replay_run_propagates_entrypoint_exceptions(monkeypatch):
     monkeypatch.setattr(runner_module, "fetch_run", lambda *a, **kw: {"id": "r", "spans": []})
 

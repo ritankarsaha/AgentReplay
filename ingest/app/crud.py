@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
@@ -9,7 +10,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from .models import Project, Run, SpanModel
+from .models import LoginEvent, Project, Run, SpanModel
 from .schemas import SpanIn
 
 # Must match `agentreplay/fail.py`'s `FAIL_SPAN_TYPE`/`FAIL_SPAN_NAME` — the
@@ -221,3 +222,37 @@ async def get_run_with_spans_by_id(session: AsyncSession, *, run_id: str) -> Opt
     stmt = select(Run).options(selectinload(Run.spans)).where(Run.id == run_id)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def insert_login_event(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    email: str,
+    name: Optional[str],
+    image: Optional[str],
+    provider: str,
+) -> LoginEvent:
+    event = LoginEvent(
+        id=str(uuid.uuid4()),
+        project_id=project_id,
+        email=email,
+        name=name,
+        image=image,
+        provider=provider,
+    )
+    session.add(event)
+    await session.flush()
+    await session.refresh(event)
+    return event
+
+
+async def list_login_events(session: AsyncSession, *, project_id: str, limit: int = 50) -> List[LoginEvent]:
+    stmt = (
+        select(LoginEvent)
+        .where(LoginEvent.project_id == project_id)
+        .order_by(LoginEvent.created_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())

@@ -17,9 +17,17 @@ export interface SuggestedAssertion {
   description: string;
 }
 
-// The full `runs.diagnosis` JSONB blob (`ingest/app/classifier.py`). On a
-// successful classification every field through `classified_at` is
-// present; on a classifier error only `error`/`backend`/`attempted_at` are.
+export interface AssertionSpec {
+  must_call_tools: string[];
+  must_not_call_tools: string[];
+  max_steps: number | null;
+  no_exception: boolean;
+  rationale: string;
+  model: string;
+
+  semantic_rubric: string | null;
+}
+
 export interface Diagnosis {
   failure_class?: string;
   culprit_span_id?: string | null;
@@ -30,6 +38,17 @@ export interface Diagnosis {
   classified_at?: string;
   error?: string;
   attempted_at?: string;
+  assertion_spec?: AssertionSpec;
+}
+
+
+export interface GenerateTestResult {
+  run_id: string;
+  fixture_filename: string;
+  fixture_source: string;
+  test_filename: string;
+  test_source: string;
+  assertion_spec: AssertionSpec | null;
 }
 
 export interface RunOut {
@@ -70,6 +89,20 @@ export interface RunDetailOut extends RunOut {
 
 interface RunListOut {
   runs: RunOut[];
+}
+
+export interface LoginEventOut {
+  id: string;
+  project_id: string;
+  email: string;
+  name: string | null;
+  image: string | null;
+  provider: string;
+  created_at: string;
+}
+
+interface LoginEventListOut {
+  events: LoginEventOut[];
 }
 
 class IngestConfigError extends Error {}
@@ -114,6 +147,15 @@ async function ingestFetch<T>(path: string): Promise<T> {
 
 export class NotFoundError extends Error {}
 
+export class IngestApiError extends Error {
+  constructor(
+    public readonly status: number,
+    detail: string
+  ) {
+    super(detail);
+  }
+}
+
 export async function getRuns(limit = 50): Promise<RunOut[]> {
   const data = await ingestFetch<RunListOut>(`/v1/runs?limit=${limit}`);
   return data.runs;
@@ -126,4 +168,70 @@ export async function getRun(runId: string): Promise<RunDetailOut | null> {
     if (err instanceof NotFoundError) return null;
     throw err;
   }
+}
+
+export async function postGenerateTest(
+  runId: string,
+  entrypoint: string
+): Promise<GenerateTestResult> {
+  const { baseUrl, apiKey } = getConfig();
+
+  const res = await fetch(`${baseUrl}/v1/runs/${encodeURIComponent(runId)}/generate-test`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ entrypoint }),
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const detail =
+      (body && typeof body === "object" && "detail" in body && String(body.detail)) ||
+      `ingest generate-test -> ${res.status}`;
+    throw new IngestApiError(res.status, detail);
+  }
+
+  return (await res.json()) as GenerateTestResult;
+}
+
+export async function getLoginEvents(limit = 50): Promise<LoginEventOut[]> {
+  const data = await ingestFetch<LoginEventListOut>(`/v1/auth-events?limit=${limit}`);
+  return data.events;
+}
+
+/**
+ * Called from `auth.ts`'s `events.signIn` -- best-effort by design (a
+ * logging failure must never block a real sign-in), so this throws on
+ * failure like every other write here and the caller is responsible for
+ * catching it.
+ */
+export async function postLoginEvent(event: {
+  email: string;
+  name?: string | null;
+  image?: string | null;
+  provider: string;
+}): Promise<LoginEventOut> {
+  const { baseUrl, apiKey } = getConfig();
+
+  const res = await fetch(`${baseUrl}/v1/auth-events`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(event),
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new IngestApiError(res.status, `ingest auth-events -> ${res.status}: ${body}`);
+  }
+
+  return (await res.json()) as LoginEventOut;
 }

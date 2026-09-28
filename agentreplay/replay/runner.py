@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator
 
+from .._async_call import call_maybe_async
 from .client import ReplaySession, replay_mode
 from .loader import fetch_run, load_run_from_file
 
@@ -99,11 +100,10 @@ def _suppress_live_init() -> Iterator[None]:
 
 
 def _replay_loaded_spans(run_id: str, spans: list, entrypoint: str) -> ReplayResult:
-    """Shared tail end of `replay_run()`/`replay_run_from_file()`: replay `spans`, call `entrypoint`."""
     func = resolve_entrypoint(entrypoint)
 
     with _suppress_live_init(), replay_mode(spans) as session:
-        entrypoint_result = func()
+        entrypoint_result = call_maybe_async(func())
 
     return ReplayResult(run_id=run_id, session=session, entrypoint_result=entrypoint_result)
 

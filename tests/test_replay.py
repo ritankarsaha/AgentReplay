@@ -3,12 +3,22 @@ from datetime import datetime, timezone
 
 import pytest
 
+import agentreplay
+from agentreplay import _state
 from agentreplay.fingerprint import compute_fingerprint
 from agentreplay.patching.common import build_request_payload
-from agentreplay.replay import ReplayDivergence, ReplayedError, ReplayError, is_active, replay_mode
+from agentreplay.replay import (
+    ReplayDivergence,
+    ReplayedError,
+    ReplayError,
+    is_active,
+    mock_tools_mode,
+    replay_mode,
+)
 from agentreplay.replay import client as replay_client
 from agentreplay.replay.store import CallSiteQueue, RecordedCall, RecordedRun
 from agentreplay.span import Span
+from agentreplay.tool import _build_tool_payload
 
 anthropic = pytest.importorskip("anthropic")
 openai = pytest.importorskip("openai")
@@ -173,6 +183,52 @@ def test_recordedrun_accepts_span_to_dict():
     span_dict = _span("anthropic.messages.create", 0, fp).to_dict()
     run = RecordedRun([span_dict])
     assert run.resolve("anthropic.messages.create", payload) is not None
+
+
+# --- consumed_count() / called_sites() (chunk 4.4: structural assertions) --
+
+
+def test_called_sites_empty_before_any_resolve():
+    spans = [_span("search", 0, "fp-a"), _span("lookup", 0, "fp-b")]
+    run = RecordedRun(spans, span_type="llm")
+    assert run.called_sites() == set()
+    assert run.consumed_count() == 0
+
+
+def test_called_sites_only_includes_actually_resolved_call_sites():
+    spans = [_span("search", 0, "fp-a"), _span("lookup", 0, "fp-b")]
+    run = RecordedRun(spans, span_type="llm")
+
+    run.resolve("search", {"x": 1})  # fingerprint won't match -> sequence fallback, still consumes
+
+    assert run.called_sites() == {"search"}
+    assert run.consumed_count() == 1
+
+
+def test_consumed_count_sums_across_call_sites_and_repeats():
+    spans = [
+        _span("search", 0, "fp-a"),
+        _span("search", 1, "fp-b"),
+        _span("lookup", 0, "fp-c"),
+    ]
+    run = RecordedRun(spans, span_type="llm")
+
+    run.resolve("search", {})
+    run.resolve("search", {})
+    run.resolve("lookup", {})
+
+    assert run.called_sites() == {"search", "lookup"}
+    assert run.consumed_count() == 3
+
+
+def test_called_sites_unaffected_by_unmatched_call_site():
+    spans = [_span("search", 0, "fp-a")]
+    run = RecordedRun(spans, span_type="llm")
+
+    assert run.resolve("never_recorded", {}) is None  # no queue at all for this name
+
+    assert run.called_sites() == set()
+    assert run.consumed_count() == 0
 
 
 # --- replay_mode() patch/unpatch + reconstruction against real SDK classes -
@@ -355,3 +411,86 @@ def test_patch_for_replay_skips_missing_provider(monkeypatch):
     with replay_mode([]):
         assert openai_completions.Completions.create is not before
     assert openai_completions.Completions.create is before
+
+
+# --- mock_tools_mode (chunk 4.1: the mechanism a generated test needs to
+# pin tool calls to a recorded fixture while leaving the LLM live) ----------
+
+
+def _tool_span(name, idx, fingerprint, output=None, error=None, run_id="run-1"):
+    return Span(
+        id=f"tool-span-{name}-{idx}",
+        run_id=run_id,
+        parent_id=None,
+        type="tool",
+        name=name,
+        input={"seq": idx},
+        output=output,
+        error=error,
+        started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        duration_ms=1.0,
+        fingerprint=fingerprint,
+    )
+
+
+def test_mock_tools_mode_serves_recorded_tool_output():
+    calls = []
+
+    @agentreplay.tool
+    def search(query: str) -> str:
+        calls.append(query)
+        return "live"
+
+    fp = compute_fingerprint({"tool": search.__qualname__, "input": _build_tool_payload(("x",), {})})
+    span = _tool_span(search.__qualname__, 0, fp, output="recorded")
+
+    with mock_tools_mode([span]) as run:
+        assert search("x") == "recorded"
+        assert calls == []  # real function body never ran
+        assert run.remaining_count() == 0
+
+
+def test_mock_tools_mode_leaves_llm_clients_unpatched():
+    before_sync = anthropic_messages.Messages.create
+    before_async = anthropic_messages.AsyncMessages.create
+
+    with mock_tools_mode([]):
+        assert is_active() is False
+        assert anthropic_messages.Messages.create is before_sync
+        assert anthropic_messages.AsyncMessages.create is before_async
+
+
+def test_mock_tools_mode_clears_active_run_after_block():
+    with mock_tools_mode([]):
+        assert _state.get_active_tool_replay_run() is not None
+    assert _state.get_active_tool_replay_run() is None
+
+
+def test_mock_tools_mode_clears_active_run_on_exception():
+    with pytest.raises(RuntimeError):
+        with mock_tools_mode([]):
+            raise RuntimeError("boom")
+    assert _state.get_active_tool_replay_run() is None
+
+
+def test_mock_tools_mode_tracks_called_sites_through_real_tool_decorator():
+    # End-to-end through the actual @agentreplay.tool wrapper (not the
+    # synthetic RecordedRun.resolve() calls in the tests above) -- this is
+    # exactly what chunk 4.4's assertions.py inspects after a generated
+    # test's entrypoint call.
+    @agentreplay.tool
+    def search(query: str) -> str:
+        return "live"
+
+    @agentreplay.tool
+    def unused_tool() -> str:
+        return "live"
+
+    fp = compute_fingerprint({"tool": search.__qualname__, "input": _build_tool_payload(("x",), {})})
+    span = _tool_span(search.__qualname__, 0, fp, output="recorded")
+
+    with mock_tools_mode([span]) as run:
+        search("x")
+        assert run.called_sites() == {search.__qualname__}
+        assert unused_tool.__qualname__ not in run.called_sites()
+        assert run.consumed_count() == 1

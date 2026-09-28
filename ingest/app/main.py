@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import models  
 from .config import get_settings
 from .db import Base, engine
-from .routers import runs, spans
+from .routers import auth_events, runs, spans
 
 
 @asynccontextmanager
@@ -36,6 +36,7 @@ def create_app() -> FastAPI:
 
     app.include_router(spans.router)
     app.include_router(runs.router)
+    app.include_router(auth_events.router)
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict:

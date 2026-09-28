@@ -193,3 +193,13 @@ def replay_mode(spans: Any) -> Iterator[ReplaySession]:
     finally:
         unpatch_replay()
         _state.set_active_tool_replay_run(None)
+
+
+@contextmanager
+def mock_tools_mode(spans: Any) -> Iterator[RecordedRun]:
+    run = RecordedRun(spans, span_type="tool")
+    _state.set_active_tool_replay_run(run)
+    try:
+        yield run
+    finally:
+        _state.set_active_tool_replay_run(None)

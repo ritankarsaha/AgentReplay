@@ -1,8 +1,13 @@
 """`@agentreplay.tool` decorator (chunk 2.5, CLAUDE.md §3.3 Layer 3).
 
 Wraps a plain Python function (sync or async) and records one `type="tool"`
-span per call: input = serialized `(args, kwargs)`, output = the serialized
-return value, error on exception.
+span per call: input = serialized `(args, kwargs)` (via `safe_serialize()`,
+unchanged shape — this is what `compute_fingerprint()` hashes for replay
+matching, so it must never change), output = type-tagged serialized return
+value (via `typed_serialize.to_typed_json()`, decoded back with
+`from_typed_json()` on replay so e.g. a tuple/set/datetime/bytes return
+value round-trips as itself instead of degrading to a list/string), error on
+exception.
 
 Usage::
 
@@ -46,6 +51,7 @@ from .fingerprint import compute_fingerprint
 from .patching.common import build_error_payload
 from .serialize import safe_serialize
 from .span import Span
+from .typed_serialize import from_typed_json, to_typed_json
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -82,7 +88,7 @@ def _resolve_replay(run: Any, span_name: str, args: tuple, kwargs: dict) -> Any:
         )
     if call.error is not None:
         raise ReplayedError(call.error)
-    return call.output
+    return from_typed_json(call.output)
 
 
 def _start(span_name: str, args: tuple, kwargs: dict) -> dict:
@@ -168,7 +174,7 @@ def tool(func: Optional[F] = None, *, name: Optional[str] = None) -> Any:
                 except Exception as exc:
                     _finish(ctx, output=None, error=build_error_payload(exc))
                     raise
-                _finish(ctx, output=safe_serialize(result), error=None)
+                _finish(ctx, output=to_typed_json(result), error=None)
                 return result
 
             return async_wrapper  # type: ignore[return-value]
@@ -188,7 +194,7 @@ def tool(func: Optional[F] = None, *, name: Optional[str] = None) -> Any:
             except Exception as exc:
                 _finish(ctx, output=None, error=build_error_payload(exc))
                 raise
-            _finish(ctx, output=safe_serialize(result), error=None)
+            _finish(ctx, output=to_typed_json(result), error=None)
             return result
 
         return sync_wrapper  # type: ignore[return-value]

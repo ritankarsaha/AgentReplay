@@ -165,3 +165,18 @@ def test_not_initialized_runs_without_recording():
 
     assert not _state.is_initialized()
     assert add(1, 2) == 3
+
+
+def test_tuple_return_value_recorded_as_typed_tag():
+    @agentreplay.tool
+    def coordinates():
+        return (1, 2)
+
+    agentreplay.init(api_key="key", project_id="proj")
+    result = coordinates()
+
+    assert result == (1, 2)
+    span = agentreplay.get_recorded_spans()[0]
+    # Recorded span data is the typed-tagged JSON shape, not a plain list --
+    # this is the wire format that lets replay reconstruct the tuple.
+    assert span.output == {"__agentreplay_type__": "tuple", "value": [1, 2]}
