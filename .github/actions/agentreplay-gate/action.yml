@@ -9,7 +9,7 @@ inputs:
   endpoint:
     description: "AgentReplay ingest API base URL"
     required: false
-    default: "https://ingest.agentreplay.dev"
+    default: "https://agentreplay-ingest.fly.dev"
   api-key:
     description: "AgentReplay ingest API key (pass a repo/org secret, never hardcode)"
     required: true

@@ -1,35 +1,76 @@
 name: CI
+
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sdk:
+    name: SDK (py${{ matrix.python }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
+      fail-fast: false
       matrix:
-        python: ["3.12"]
+        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
-      - run: pytest tests -q
+      # testpaths in pyproject.toml covers tests/ and controlplane/tests/.
+      - run: pytest -q
 
-  ingest:
+  package:
+    name: SDK package
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install . ./ingest[dev]
-      - run: cd ingest && pytest tests -q
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+
+  ingest:
+    name: Ingest API (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"] # 3.11 is the production image (ingest/Dockerfile)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            ingest/pyproject.toml
+      # Ingest tests import the SDK, so install both.
+      - run: pip install . "./ingest[dev]"
+      - run: pytest tests -q
+        working-directory: ingest
 
   web:
+    name: Web viewer
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: web
@@ -38,6 +79,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - run: npx next typegen
       - run: npx tsc --noEmit
       - run: npx eslint app components lib auth.ts
+      - run: npm run build
+
+  ci-ok:
+    name: CI passed
+    if: always()
+    needs: [sdk, package, ingest, web]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "A required job failed or was cancelled"; exit 1
+          fi

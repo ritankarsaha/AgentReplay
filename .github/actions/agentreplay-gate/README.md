@@ -15,6 +15,10 @@ the check if any case falls below its priority's pass-rate threshold
 name: AgentReplay regression gate
 on: pull_request
 
+permissions:
+  contents: read
+  pull-requests: write # lets the action post the sticky PR comment
+
 jobs:
   gate:
     runs-on: ubuntu-latest
@@ -26,8 +30,7 @@ jobs:
           trials: "3"
 ```
 
-Register cases first (typically from the viewer's "Promote to regression
-case" flow, or directly):
+Register cases first (via the API; there is no viewer button for this yet):
 
 ```bash
 curl -X POST "$AGENTREPLAY_ENDPOINT/v1/regression-cases" \
