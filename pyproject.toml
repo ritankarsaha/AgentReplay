@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Testing",
 ]
-dependencies = ["httpx>=0.23"]
+dependencies = ["httpx>=0.28.1"]
 
 [project.urls]
 Homepage = "https://www.agentreplay.space"
