@@ -23,3 +23,5 @@ supabase/.temp/
 # Local Redis dumps
 dump.rdb
 *.rdb
+CLAUDE1.md
+PROGRESS-HACKATHON.md

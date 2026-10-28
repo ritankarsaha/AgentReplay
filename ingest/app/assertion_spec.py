@@ -51,6 +51,7 @@ class AssertionSpec:
     # `None` when the structural fields alone fully capture the failure --
     # layered on top of, not instead of, the structural tier.
     semantic_rubric: Optional[str] = None
+    usage: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {
@@ -61,6 +62,7 @@ class AssertionSpec:
             "rationale": self.rationale,
             "model": self.model,
             "semantic_rubric": self.semantic_rubric,
+            **({"usage": self.usage} if self.usage else {}),
         }
 
 
@@ -192,7 +194,7 @@ def _build_user_message(trace_summary: str, diagnosis_text: str, failure_class: 
     return "\n".join(parts)
 
 
-def _result_from_tool_input(data: dict, *, model: str) -> AssertionSpec:
+def _result_from_tool_input(data: dict, *, model: str, usage: Optional[dict] = None) -> AssertionSpec:
     must_call = data.get("must_call_tools")
     must_not_call = data.get("must_not_call_tools")
     max_steps = data.get("max_steps")
@@ -207,6 +209,7 @@ def _result_from_tool_input(data: dict, *, model: str) -> AssertionSpec:
         rationale=str(data.get("rationale") or ""),
         model=model,
         semantic_rubric=str(semantic_rubric) if isinstance(semantic_rubric, str) and semantic_rubric.strip() else None,
+        usage=usage,
     )
 
 
@@ -286,6 +289,32 @@ def generate_with_nim(
     return _result_from_tool_input(arguments, model=model)
 
 
+def generate_with_meta(
+    trace_summary: str,
+    diagnosis_text: str,
+    failure_class: Optional[str],
+    *,
+    api_key: str,
+    model: str,
+    base_url: str,
+) -> AssertionSpec:
+    from .meta import call_meta_tool
+
+    result = call_meta_tool(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        system=_system_prompt(),
+        user=_build_user_message(trace_summary, diagnosis_text, failure_class),
+        tool_name=ASSERTION_SPEC_TOOL_NAME,
+        tool_description=(
+            "Propose a structural regression-test assertion spec for a classified agent failure."
+        ),
+        parameters=_tool_input_schema(),
+    )
+    return _result_from_tool_input(result.arguments, model=model, usage=result.usage_dict())
+
+
 def generate_assertion_spec(
     trace_summary: str,
     diagnosis_text: str,
@@ -306,6 +335,21 @@ def generate_assertion_spec(
             api_key=settings.assertion_spec_nim_api_key,
             model=settings.assertion_spec_nim_model,
             base_url=settings.nim_base_url,
+        )
+
+    if settings.assertion_spec_backend == "meta":
+        api_key = settings.assertion_spec_meta_api_key or settings.meta_api_key
+        if not api_key:
+            raise AssertionSpecNotConfigured(
+                "AGENTREPLAY_INGEST_ASSERTION_SPEC_META_API_KEY (or ..._META_API_KEY) is not set"
+            )
+        return generate_with_meta(
+            trace_summary,
+            diagnosis_text,
+            failure_class,
+            api_key=api_key,
+            model=settings.meta_model,
+            base_url=settings.meta_base_url,
         )
 
     if not settings.anthropic_api_key:

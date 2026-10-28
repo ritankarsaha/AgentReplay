@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func, true as sa_true
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -190,3 +190,106 @@ class LoginEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+
+class Agent(Base):
+    __tablename__ = "agents"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    owner_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    public_key: Mapped[str] = mapped_column(String, nullable=False)
+    # active | suspended | revoked
+    status: Mapped[str] = mapped_column(String, nullable=False, default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ScopeManifest(Base):
+    __tablename__ = "scope_manifests"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    agent_id: Mapped[str] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest: Mapped[dict] = mapped_column(JSONVariant, nullable=False)
+    signature: Mapped[str] = mapped_column(String, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AccessToken(Base):
+    __tablename__ = "access_tokens"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    agent_id: Mapped[str] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    connector: Mapped[str] = mapped_column(String, nullable=False)
+    scopes: Mapped[list] = mapped_column(JSONVariant, nullable=False, default=list)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TrustScore(Base):
+    __tablename__ = "trust_scores"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    agent_id: Mapped[str] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    band: Mapped[str] = mapped_column(String, nullable=False)
+    components: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    trigger_run_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+
+class Incident(Base):
+    __tablename__ = "incidents"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    agent_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # scope_violation | spend_breach | failure
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    severity: Mapped[str] = mapped_column(String, nullable=False, default="high", server_default="high")
+    culprit_span_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # open | resolved
+    status: Mapped[str] = mapped_column(String, nullable=False, default="open", server_default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Filing(Base):
+    __tablename__ = "filings"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    incident_id: Mapped[str] = mapped_column(
+        ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    type: Mapped[str] = mapped_column(String, nullable=False)  # dispute | claim
+    packet: Mapped[dict] = mapped_column(JSONVariant, nullable=False)
+    trace_hash: Mapped[str] = mapped_column(String, nullable=False)
+    simulated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sa_true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModelRun(Base):
+    __tablename__ = "model_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    source_run_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    span_id: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    output: Mapped[Optional[Any]] = mapped_column(JSONVariant, nullable=True)
+    verdict: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    cost_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

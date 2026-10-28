@@ -7,7 +7,7 @@ back onto the `runs` row: `failure_class`/`root_span_id` (overwriting
 whatever 3.5 set, since the classifier's verdict is authoritative) plus the
 new `classification_status`/`diagnosis` columns.
 
-Backend-swappable (CLAUDE.md §5 NIM cost-cutting track, scoped to "the
+Backend-swappable ("sonnet" | "nim" | "meta"; CLAUDE.md §5 NIM cost-cutting track, scoped to "the
 CLASSIFIER ONLY (3.6)"): `classify_trace()` dispatches to either Anthropic
 Sonnet (forced `tool_choice`, the literal "forced JSON tool_use" CLAUDE.md
 §3.6 calls for) or an OpenAI-compatible NIM endpoint (forced function-call
@@ -51,6 +51,7 @@ class ClassificationResult:
     suggested_assertion: dict
     model: str
     backend: str
+    usage: Optional[dict] = None
 
 
 def _tool_input_schema() -> dict:
@@ -137,7 +138,9 @@ def build_trace_summary(run: Run, spans: Sequence[SpanModel]) -> str:
     return "\n".join(lines)
 
 
-def _result_from_tool_input(data: dict, *, model: str, backend: str) -> ClassificationResult:
+def _result_from_tool_input(
+    data: dict, *, model: str, backend: str, usage: Optional[dict] = None
+) -> ClassificationResult:
     failure_class = data.get("failure_class")
     if failure_class not in MAST_CATEGORY_KEYS:
         failure_class = "other"
@@ -157,6 +160,7 @@ def _result_from_tool_input(data: dict, *, model: str, backend: str) -> Classifi
         suggested_assertion=suggested_assertion,
         model=model,
         backend=backend,
+        usage=usage,
     )
 
 
@@ -212,6 +216,26 @@ def classify_with_nim(
     return _result_from_tool_input(arguments, model=model, backend="nim")
 
 
+def classify_with_meta(
+    trace_summary: str, *, api_key: str, model: str, base_url: str
+) -> ClassificationResult:
+    from .meta import call_meta_tool
+
+    result = call_meta_tool(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        system=_system_prompt(),
+        user=trace_summary,
+        tool_name=CLASSIFY_TOOL_NAME,
+        tool_description="Classify an AI agent run failure using the MAST taxonomy.",
+        parameters=_tool_input_schema(),
+    )
+    return _result_from_tool_input(
+        result.arguments, model=model, backend="meta", usage=result.usage_dict()
+    )
+
+
 def classify_trace(trace_summary: str, settings: Settings) -> ClassificationResult:
     """Dispatch to the configured backend. Raises `ClassifierNotConfigured` if no key is set."""
     if settings.classifier_backend == "nim":
@@ -222,6 +246,16 @@ def classify_trace(trace_summary: str, settings: Settings) -> ClassificationResu
             api_key=settings.nim_api_key,
             model=settings.nim_model,
             base_url=settings.nim_base_url,
+        )
+
+    if settings.classifier_backend == "meta":
+        if not settings.meta_api_key:
+            raise ClassifierNotConfigured("AGENTREPLAY_INGEST_META_API_KEY is not set")
+        return classify_with_meta(
+            trace_summary,
+            api_key=settings.meta_api_key,
+            model=settings.meta_model,
+            base_url=settings.meta_base_url,
         )
 
     if not settings.anthropic_api_key:
@@ -285,6 +319,7 @@ async def classify_run_async(
         "suggested_assertion": result.suggested_assertion,
         "model": result.model,
         "backend": result.backend,
+        **({"usage": result.usage} if result.usage else {}),
         "classified_at": datetime.now(timezone.utc).isoformat(),
     }
     await session.commit()

@@ -232,3 +232,87 @@ def test_judge_user_message_embeds_rubric_and_serializes_non_json_types():
     message = _judge_user_message({"when": datetime(2026, 1, 1, tzinfo=timezone.utc)}, "be correct")
     assert "be correct" in message
     assert "2026-01-01" in message
+def test_default_judge_raises_when_meta_backend_selected_without_key(monkeypatch):
+    monkeypatch.setenv("AGENTREPLAY_SEMANTIC_JUDGE_BACKEND", "meta")
+    monkeypatch.delenv("AGENTREPLAY_SEMANTIC_JUDGE_META_API_KEY", raising=False)
+    monkeypatch.delenv("META_API_KEY", raising=False)
+    with pytest.raises(SemanticJudgeNotConfigured, match="SEMANTIC_JUDGE_META_API_KEY"):
+        _default_judge({"x": 1}, "some rubric")
+
+
+def test_default_judge_dispatches_to_meta_when_selected(monkeypatch):
+    import agentreplay.testgen.assertions as assertions_module
+
+    monkeypatch.setenv("AGENTREPLAY_SEMANTIC_JUDGE_BACKEND", "meta")
+    captured = {}
+
+    def fake_judge_with_meta(actual_output, rubric, *, model):
+        captured.update(model=model)
+        return SemanticJudgment(passes=True, reasoning="meta says fine")
+
+    monkeypatch.setattr(assertions_module, "_judge_with_meta", fake_judge_with_meta)
+    assert _default_judge({"x": 1}, "r").passes is True
+    assert captured == {"model": "muse-spark-1.3"}
+
+
+def _fake_meta_openai(monkeypatch, message, captured):
+    from types import SimpleNamespace
+
+    import openai
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    class _Client:
+        def __init__(self, **kwargs):
+            captured["client"] = kwargs
+            self.chat = SimpleNamespace(completions=_Completions())
+
+    monkeypatch.setattr(openai, "OpenAI", _Client)
+
+
+def test_judge_with_meta_uses_auto_tool_choice_and_parses_tool_call(monkeypatch):
+    from types import SimpleNamespace
+
+    import agentreplay.testgen.assertions as assertions_module
+
+    monkeypatch.setenv("META_API_KEY", "k")
+    monkeypatch.delenv("META_BASE_URL", raising=False)
+    captured: dict = {}
+    message = SimpleNamespace(
+        content=None,
+        tool_calls=[SimpleNamespace(function=SimpleNamespace(
+            name="judge_output", arguments='{"passes": false, "reasoning": "bad"}'))],
+    )
+    _fake_meta_openai(monkeypatch, message, captured)
+
+    judgment = assertions_module._judge_with_meta({"x": 1}, "rubric", model="muse-spark-1.3")
+
+    assert (judgment.passes, judgment.reasoning) == (False, "bad")
+    assert captured["tool_choice"] == "auto"
+    assert captured["max_tokens"] >= 2000
+    assert captured["client"]["base_url"] == "https://api.meta.ai/v1"
+
+
+def test_judge_with_meta_falls_back_to_json_text(monkeypatch):
+    from types import SimpleNamespace
+
+    import agentreplay.testgen.assertions as assertions_module
+
+    monkeypatch.setenv("META_API_KEY", "k")
+    message = SimpleNamespace(content='Verdict: {"passes": true, "reasoning": "ok"}', tool_calls=None)
+    _fake_meta_openai(monkeypatch, message, {})
+    assert assertions_module._judge_with_meta({"x": 1}, "r", model="m").passes is True
+
+
+def test_judge_with_meta_errors_on_unusable_reply(monkeypatch):
+    from types import SimpleNamespace
+
+    import agentreplay.testgen.assertions as assertions_module
+
+    monkeypatch.setenv("META_API_KEY", "k")
+    _fake_meta_openai(monkeypatch, SimpleNamespace(content=None, tool_calls=None), {})
+    with pytest.raises(SemanticJudgeNotConfigured, match="neither"):
+        assertions_module._judge_with_meta({"x": 1}, "r", model="m")

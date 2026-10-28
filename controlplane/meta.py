@@ -1,0 +1,47 @@
+"""Plain `openai.OpenAI` client for the Meta Model API, so the SDK's client
+patching records Muse Spark calls as ordinary `llm` spans.
+
+Quirks: `tool_choice` accepts only "auto", and reasoning tokens count against
+`max_tokens` (even a one-word reply spends 200-350), so keep generous headroom.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Optional
+
+DEFAULT_BASE_URL = "https://api.meta.ai/v1"
+DEFAULT_MODEL = "muse-spark-1.3"
+SAM_MODEL = "sam-3.1"
+
+MIN_MAX_TOKENS = 2000
+
+
+class MetaNotConfigured(Exception):
+    """META_API_KEY is not set."""
+
+
+def meta_model() -> str:
+    return os.environ.get("META_MODEL") or DEFAULT_MODEL
+
+
+def meta_client(api_key: Optional[str] = None, base_url: Optional[str] = None):
+    import openai
+
+    key = api_key or os.environ.get("META_API_KEY")
+    if not key:
+        raise MetaNotConfigured("META_API_KEY is not set (see .env.example)")
+    return openai.OpenAI(
+        api_key=key, base_url=base_url or os.environ.get("META_BASE_URL") or DEFAULT_BASE_URL
+    )
+
+
+def chat(prompt: str, *, system: Optional[str] = None, max_tokens: int = MIN_MAX_TOKENS, client=None) -> str:
+    client = client or meta_client()
+    messages = ([{"role": "system", "content": system}] if system else []) + [
+        {"role": "user", "content": prompt}
+    ]
+    response = client.chat.completions.create(
+        model=meta_model(), messages=messages, max_tokens=max(max_tokens, MIN_MAX_TOKENS)
+    )
+    return response.choices[0].message.content or ""

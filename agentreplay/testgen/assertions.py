@@ -13,6 +13,8 @@ DEFAULT_SEMANTIC_JUDGE_MODEL = "claude-sonnet-4-6"
 
 DEFAULT_SEMANTIC_JUDGE_NIM_MODEL = "meta/llama-3.1-8b-instruct"
 DEFAULT_SEMANTIC_JUDGE_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+DEFAULT_SEMANTIC_JUDGE_META_MODEL = "muse-spark-1.3"
+DEFAULT_SEMANTIC_JUDGE_META_BASE_URL = "https://api.meta.ai/v1"
 SEMANTIC_JUDGE_TOOL_NAME = "judge_output"
 
 
@@ -181,11 +183,77 @@ def _judge_with_nim(actual_output: Any, rubric: str, *, model: str) -> SemanticJ
     )
 
 
+def _judge_with_meta(actual_output: Any, rubric: str, *, model: str) -> SemanticJudgment:
+    """Meta rejects a forced `tool_choice` and spends reasoning tokens against
+    `max_tokens`, so this uses "auto", a generous cap, and a JSON-text fallback."""
+    try:
+        import openai
+    except ImportError as exc:
+        raise SemanticJudgeNotConfigured(
+            "the 'openai' package is required for the meta semantic-judge backend "
+            "(pip install openai)"
+        ) from exc
+
+    api_key = os.environ.get("AGENTREPLAY_SEMANTIC_JUDGE_META_API_KEY") or os.environ.get(
+        "META_API_KEY"
+    )
+    if not api_key:
+        raise SemanticJudgeNotConfigured(
+            "AGENTREPLAY_SEMANTIC_JUDGE_META_API_KEY (or META_API_KEY) is not set — required "
+            "for the meta semantic-judge backend (AGENTREPLAY_SEMANTIC_JUDGE_BACKEND=meta)"
+        )
+    base_url = os.environ.get("META_BASE_URL") or DEFAULT_SEMANTIC_JUDGE_META_BASE_URL
+
+    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=4096,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": SEMANTIC_JUDGE_TOOL_NAME,
+                    "description": "Judge whether the actual output satisfies the rubric.",
+                    "parameters": _judge_tool_schema(),
+                },
+            }
+        ],
+        tool_choice="auto",
+        messages=[
+            {"role": "system", "content": _judge_system_prompt()},
+            {"role": "user", "content": _judge_user_message(actual_output, rubric)},
+        ],
+    )
+    message = response.choices[0].message
+    arguments = None
+    for call in message.tool_calls or []:
+        if call.function.name == SEMANTIC_JUDGE_TOOL_NAME:
+            arguments = json.loads(call.function.arguments)
+            break
+    if arguments is None and message.content:
+        start, end = message.content.find("{"), message.content.rfind("}")
+        if start != -1 and end > start:
+            try:
+                arguments = json.loads(message.content[start : end + 1])
+            except json.JSONDecodeError:
+                arguments = None
+    if not isinstance(arguments, dict):
+        raise SemanticJudgeNotConfigured(
+            f"{model} returned neither a `{SEMANTIC_JUDGE_TOOL_NAME}` call nor a JSON verdict"
+        )
+    return SemanticJudgment(
+        passes=bool(arguments.get("passes")),
+        reasoning=str(arguments.get("reasoning") or ""),
+    )
+
+
 def _default_judge(actual_output: Any, rubric: str, *, model: Optional[str] = None) -> SemanticJudgment:
-    """Dispatches to `AGENTREPLAY_SEMANTIC_JUDGE_BACKEND` (`"anthropic"` default, or
-    `"nim"`) — see this module's docstring for why this is swappable at all.
+    """Dispatches to `AGENTREPLAY_SEMANTIC_JUDGE_BACKEND` (`"anthropic"` default,
+    `"nim"`, or `"meta"`) — see this module's docstring for why this is swappable at all.
     """
     backend = os.environ.get("AGENTREPLAY_SEMANTIC_JUDGE_BACKEND", "anthropic")
+    if backend == "meta":
+        return _judge_with_meta(actual_output, rubric, model=model or DEFAULT_SEMANTIC_JUDGE_META_MODEL)
     if backend == "nim":
         return _judge_with_nim(actual_output, rubric, model=model or DEFAULT_SEMANTIC_JUDGE_NIM_MODEL)
     return _judge_with_anthropic(actual_output, rubric, model=model or DEFAULT_SEMANTIC_JUDGE_MODEL)

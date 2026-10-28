@@ -128,7 +128,9 @@ async def upsert_run(
             "last_seen_at": stmt.excluded.last_seen_at,
             "agent_version": func.coalesce(stmt.excluded.agent_version, table.c.agent_version),
             "framework": func.coalesce(stmt.excluded.framework, table.c.framework),
+            # `halted` is terminal: a late batch must not downgrade it.
             "status": case(
+                (table.c.status == "halted", "halted"),
                 (stmt.excluded.status == "failure", "failure"),
                 else_=table.c.status,
             ),

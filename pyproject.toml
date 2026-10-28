@@ -48,4 +48,4 @@ packages = ["agentreplay"]
 asyncio_mode = "auto"
 # Restrict to the SDK's own tests — ingest/ is a separate subproject with its
 # own pyproject.toml/venv (different deps: FastAPI/SQLAlchemy/etc.).
-testpaths = ["tests"]
+testpaths = ["tests", "controlplane/tests"]
