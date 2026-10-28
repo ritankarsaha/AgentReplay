@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # context is repo root) — ingest/app/testgen.py imports agentreplay.testgen.*
 # directly at runtime, so the SDK package has to ship in this image too, not
 # just ingest/'s own code.
-COPY pyproject.toml LICENSE ./
+COPY pyproject.toml LICENSE NOTICE README.md ./
 COPY agentreplay ./agentreplay
 RUN pip install --no-cache-dir .
 

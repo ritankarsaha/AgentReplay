@@ -107,29 +107,47 @@ interface LoginEventListOut {
 
 class IngestConfigError extends Error {}
 
-function getConfig(): { baseUrl: string; apiKey: string } {
+function getConfig(): { baseUrl: string; serviceToken: string } {
   const baseUrl = process.env.INGEST_API_URL;
-  const apiKey = process.env.INGEST_API_KEY;
+  const serviceToken = process.env.INGEST_SERVICE_TOKEN;
 
-  if (!baseUrl || !apiKey) {
+  if (!baseUrl || !serviceToken) {
     throw new IngestConfigError(
-      "Missing INGEST_API_URL or INGEST_API_KEY. Copy web/.env.example to " +
-        "web/.env.local and fill in the values from " +
-        "ingest/scripts/create_project.py."
+      "Missing INGEST_API_URL or INGEST_SERVICE_TOKEN. Copy web/.env.example to " +
+        "web/.env.local and fill them in (the token must equal the ingest " +
+        "service's AGENTREPLAY_INGEST_VIEWER_SERVICE_TOKEN)."
     );
   }
 
-  return { baseUrl, apiKey };
+  return { baseUrl, serviceToken };
 }
 
-async function ingestFetch<T>(path: string): Promise<T> {
-  const { baseUrl, apiKey } = getConfig();
+/**
+ * Who the viewer is acting for. The ingest API trusts these headers only
+ * because they arrive with the server-side service token; `email` always
+ * comes from the verified Auth.js session, never from the browser.
+ */
+export interface ViewerScope {
+  email: string;
+  projectId?: string;
+}
+
+function scopeHeaders(scope: ViewerScope): Record<string, string> {
+  const { serviceToken } = getConfig();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${serviceToken}`,
+    Accept: "application/json",
+    "X-Viewer-Email": scope.email,
+  };
+  if (scope.projectId) headers["X-Project-Id"] = scope.projectId;
+  return headers;
+}
+
+async function ingestFetch<T>(path: string, scope: ViewerScope): Promise<T> {
+  const { baseUrl } = getConfig();
 
   const res = await fetch(`${baseUrl}${path}`, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: "application/json",
-    },
+    headers: scopeHeaders(scope),
     cache: "no-store",
   });
 
@@ -156,51 +174,98 @@ export class IngestApiError extends Error {
   }
 }
 
-export async function getRuns(limit = 50): Promise<RunOut[]> {
-  const data = await ingestFetch<RunListOut>(`/v1/runs?limit=${limit}`);
+async function ingestWrite<T>(
+  path: string,
+  scope: ViewerScope | null,
+  body?: unknown
+): Promise<T> {
+  const { baseUrl, serviceToken } = getConfig();
+  const headers = scope
+    ? scopeHeaders(scope)
+    : { Authorization: `Bearer ${serviceToken}`, Accept: "application/json" };
+
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const parsed = await res.json().catch(() => null);
+    const detail =
+      (parsed && typeof parsed === "object" && "detail" in parsed && String(parsed.detail)) ||
+      `ingest ${path} -> ${res.status}`;
+    throw new IngestApiError(res.status, detail);
+  }
+
+  return (await res.json()) as T;
+}
+
+export interface ProjectOut {
+  id: string;
+  name: string;
+  api_key_prefix: string | null;
+  created_at: string;
+}
+
+/** Returned once, at creation/rotation -- the plaintext key is never retrievable again. */
+export interface ProjectWithKey extends ProjectOut {
+  api_key: string;
+}
+
+export async function listProjects(email: string): Promise<ProjectOut[]> {
+  const data = await ingestFetch<{ projects: ProjectOut[] }>("/v1/account/projects", { email });
+  return data.projects;
+}
+
+export function createProject(email: string, name: string): Promise<ProjectWithKey> {
+  return ingestWrite<ProjectWithKey>("/v1/account/projects", { email }, { name });
+}
+
+export function rotateProjectKey(email: string, projectId: string): Promise<ProjectWithKey> {
+  return ingestWrite<ProjectWithKey>(
+    `/v1/account/projects/${encodeURIComponent(projectId)}/rotate-key`,
+    { email }
+  );
+}
+
+export async function getRuns(scope: ViewerScope, limit = 50): Promise<RunOut[]> {
+  const data = await ingestFetch<RunListOut>(`/v1/runs?limit=${limit}`, scope);
   return data.runs;
 }
 
-export async function getRun(runId: string): Promise<RunDetailOut | null> {
+export async function getRun(scope: ViewerScope, runId: string): Promise<RunDetailOut | null> {
   try {
-    return await ingestFetch<RunDetailOut>(`/v1/runs/${encodeURIComponent(runId)}`);
+    return await ingestFetch<RunDetailOut>(`/v1/runs/${encodeURIComponent(runId)}`, scope);
   } catch (err) {
     if (err instanceof NotFoundError) return null;
     throw err;
   }
 }
 
-export async function postGenerateTest(
+export function postGenerateTest(
+  scope: ViewerScope,
   runId: string,
   entrypoint: string
 ): Promise<GenerateTestResult> {
-  const { baseUrl, apiKey } = getConfig();
-
-  const res = await fetch(`${baseUrl}/v1/runs/${encodeURIComponent(runId)}/generate-test`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ entrypoint }),
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    const detail =
-      (body && typeof body === "object" && "detail" in body && String(body.detail)) ||
-      `ingest generate-test -> ${res.status}`;
-    throw new IngestApiError(res.status, detail);
-  }
-
-  return (await res.json()) as GenerateTestResult;
+  return ingestWrite<GenerateTestResult>(
+    `/v1/runs/${encodeURIComponent(runId)}/generate-test`,
+    scope,
+    { entrypoint }
+  );
 }
 
 export async function getLoginEvents(limit = 50): Promise<LoginEventOut[]> {
-  const data = await ingestFetch<LoginEventListOut>(`/v1/auth-events?limit=${limit}`);
-  return data.events;
+  const { baseUrl, serviceToken } = getConfig();
+  const res = await fetch(`${baseUrl}/v1/auth-events?limit=${limit}`, {
+    headers: { Authorization: `Bearer ${serviceToken}`, Accept: "application/json" },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(`ingest /v1/auth-events -> ${res.status}: ${await res.text()}`);
+  }
+  return ((await res.json()) as LoginEventListOut).events;
 }
 
 /**
@@ -209,29 +274,11 @@ export async function getLoginEvents(limit = 50): Promise<LoginEventOut[]> {
  * failure like every other write here and the caller is responsible for
  * catching it.
  */
-export async function postLoginEvent(event: {
+export function postLoginEvent(event: {
   email: string;
   name?: string | null;
   image?: string | null;
   provider: string;
 }): Promise<LoginEventOut> {
-  const { baseUrl, apiKey } = getConfig();
-
-  const res = await fetch(`${baseUrl}/v1/auth-events`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(event),
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new IngestApiError(res.status, `ingest auth-events -> ${res.status}: ${body}`);
-  }
-
-  return (await res.json()) as LoginEventOut;
+  return ingestWrite<LoginEventOut>("/v1/auth-events", null, event);
 }

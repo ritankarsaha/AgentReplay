@@ -1,0 +1,9 @@
+AgentReplay
+Copyright 2026 The AgentReplay Authors
+
+The Python SDK (agentreplay/), examples/, tests/ and .github/actions/ in this
+repository are licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The hosted-service components -- ingest/ (API server) and web/ (dashboard) --
+are source-available under the AgentReplay Source-Available License; see
+ingest/LICENSE and web/LICENSE.

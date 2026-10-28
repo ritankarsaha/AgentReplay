@@ -8,6 +8,7 @@ import { RunHeader } from "@/components/run-header";
 import { RunStats } from "@/components/run-stats";
 import { SpanTimeline } from "@/components/span-timeline";
 import { getRun } from "@/lib/api";
+import { requireProjectScope } from "@/lib/viewer";
 import { buildSpanTree } from "@/lib/span-tree";
 
 export default async function RunDetailPage({
@@ -16,7 +17,8 @@ export default async function RunDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const run = await getRun(id);
+  const scope = await requireProjectScope();
+  const run = await getRun(scope, id);
 
   if (!run) notFound();
 

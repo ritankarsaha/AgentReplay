@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import models  
 from .config import get_settings
 from .db import Base, engine
-from .routers import auth_events, runs, spans
+from .limits import BodySizeLimitMiddleware
+from .routers import account, auth_events, regression, runs, spans
 
 
 @asynccontextmanager
@@ -26,6 +27,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="AgentReplay Ingest API", version="0.1.0", lifespan=lifespan)
 
     settings = get_settings()
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_bytes)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
@@ -34,8 +36,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.include_router(account.router)
     app.include_router(spans.router)
     app.include_router(runs.router)
+    app.include_router(regression.router)
     app.include_router(auth_events.router)
 
     @app.get("/healthz", tags=["meta"])

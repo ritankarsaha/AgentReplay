@@ -1,12 +1,20 @@
 import { NextResponse } from "next/server";
 
 import { IngestApiError, postGenerateTest } from "@/lib/api";
+import { projectScopeOrNull } from "@/lib/viewer";
 
 export async function POST(
   request: Request,
   ctx: RouteContext<"/api/runs/[id]/generate-test">
 ) {
   const { id } = await ctx.params;
+
+  // Never trust a project id from the browser: scope comes from the verified
+  // session + selected-project cookie, and ingest re-checks ownership.
+  const scope = await projectScopeOrNull();
+  if (!scope) {
+    return NextResponse.json({ detail: "not signed in or no project selected" }, { status: 401 });
+  }
 
   let entrypoint: unknown;
   try {
@@ -21,7 +29,7 @@ export async function POST(
   }
 
   try {
-    const result = await postGenerateTest(id, entrypoint.trim());
+    const result = await postGenerateTest(scope, id, entrypoint.trim());
     return NextResponse.json(result);
   } catch (err) {
     if (err instanceof IngestApiError) {

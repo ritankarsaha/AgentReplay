@@ -7,6 +7,7 @@
     agentreplay fixture --file trace.json --output tests/fixtures/run_xxx.py
     agentreplay generate-test <run_id> --entrypoint module.path:function_name --output-dir tests/fixtures
     agentreplay generate-test --file trace.json --entrypoint module.path:function_name --output-dir tests/fixtures
+    agentreplay ci gate --trials 3
 
 `replay`: fetches the recorded trace for `run_id` from the ingest API (or
 loads it from a local JSON file with `--file` — no credentials needed at
@@ -32,12 +33,15 @@ for real — structural checks (chunk 4.4) plus, if the spec includes a
 (chunk 4.7); otherwise it falls back to a placeholder `assert True` — see
 the printed summary line for which happened.
 
+`ci gate`: fetches every `active` regression case, runs each `--trials`
+times against this checkout's agent code (Mode B), prints a Markdown
+verdict table. Exit code 0 for `pass`/`warn`/`insufficient_evidence`, 1 for
+`fail` (blocks the PR).
+
 Deliberately a thin wrapper: all the actual logic is in
-`agentreplay/replay/runner.py:replay_run()`/`replay_run_from_file()` and
-`agentreplay/testgen/`'s `generate_fixture()`/`generate_fixture_from_file()`
-(4.1) and `generate_test()`/`generate_test_from_file()` (4.2+4.4), none of
-which have argparse/exit-code concerns — all are usable directly from
-other tooling.
+`agentreplay/replay/runner.py`, `agentreplay/testgen/`, and
+`agentreplay/regression/ci.py`, none of which have argparse/exit-code
+concerns.
 """
 
 from __future__ import annotations
@@ -45,18 +49,30 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import Optional, Sequence
 
 from .config import DEFAULT_ENDPOINT
+from .regression.ci import run_gate, render_markdown_report
+from .regression.gate import Verdict
 from .replay.exceptions import ReplayDivergence, ReplayedError, TraceFetchError
 from .replay.runner import replay_run, replay_run_from_file
 from .testgen.fixture import generate_fixture, generate_fixture_from_file
+from .doctor import run_doctor
 from .testgen.generate import generate_test, generate_test_from_file
+from .version import __version__
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentreplay")
+    parser.add_argument("--version", action="version", version=f"agentreplay {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="Check your setup: API key, endpoint, and send a test span"
+    )
+    doctor_parser.add_argument("--endpoint", default=None, help="Ingest API base URL")
+    doctor_parser.add_argument("--api-key", default=None, help="API key (default: $AGENTREPLAY_API_KEY)")
 
     replay_parser = subparsers.add_parser(
         "replay", help="Replay a recorded run locally (Mode A — CLAUDE.md §3.2)"
@@ -171,6 +187,36 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     gen_test_parser.add_argument(
         "--timeout", type=float, default=30.0, help="HTTP timeout in seconds (default: 30)"
+    )
+
+    ci_parser = subparsers.add_parser("ci", help="CI gate commands (agentreplay/gate@v1)")
+    ci_subparsers = ci_parser.add_subparsers(dest="ci_command", required=True)
+
+    gate_parser = ci_subparsers.add_parser(
+        "gate",
+        help="Run every active regression case against this checkout and print a verdict "
+        "(Mode B — live LLM calls, mocked tools)",
+    )
+    gate_parser.add_argument("--trials", type=int, default=3, help="Trials per case (default: 3)")
+    gate_parser.add_argument(
+        "--agent-version",
+        default=None,
+        help="Label to attach to reported results (default: $GITHUB_SHA if set)",
+    )
+    gate_parser.add_argument(
+        "--endpoint",
+        default=None,
+        help=f"Ingest API base URL (default: $AGENTREPLAY_ENDPOINT, else {DEFAULT_ENDPOINT})",
+    )
+    gate_parser.add_argument(
+        "--api-key",
+        default=None,
+        help="Ingest API key (default: $AGENTREPLAY_API_KEY)",
+    )
+    gate_parser.add_argument(
+        "--output",
+        default=None,
+        help="Path to also write the Markdown report to (e.g. for a PR-comment step)",
     )
 
     return parser
@@ -331,15 +377,66 @@ def _cmd_generate_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ci_gate(args: argparse.Namespace) -> int:
+    endpoint = args.endpoint or os.environ.get("AGENTREPLAY_ENDPOINT", DEFAULT_ENDPOINT)
+    api_key = args.api_key or os.environ.get("AGENTREPLAY_API_KEY")
+    if not api_key:
+        print(
+            "error: no API key. Pass --api-key or set AGENTREPLAY_API_KEY.",
+            file=sys.stderr,
+        )
+        return 1
+    agent_version = args.agent_version or os.environ.get("GITHUB_SHA")
+
+    print(f"agentreplay: fetching active regression cases from {endpoint} ...")
+    try:
+        outcome = run_gate(
+            endpoint=endpoint,
+            api_key=api_key,
+            trials=args.trials,
+            agent_version=agent_version,
+        )
+    except TraceFetchError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    report_md = render_markdown_report(outcome)
+    print(f"\n{report_md}\n")
+
+    if args.output:
+        Path(args.output).write_text(report_md)
+        print(f"agentreplay: wrote report to {args.output}")
+
+    for err in outcome.report_errors:
+        print(f"warning: could not report a result back to the ingest API: {err}", file=sys.stderr)
+
+    return 1 if outcome.report.overall is Verdict.FAIL else 0
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    checks = run_doctor(endpoint=args.endpoint, api_key=args.api_key)
+    for check in checks:
+        print(f"  {'OK  ' if check.ok else 'FAIL'}  {check.name}: {check.detail}")
+    if all(c.ok for c in checks):
+        print("\nAll good -- instrument your agent with agentreplay.init() and run it.")
+        return 0
+    print("\nSetup incomplete -- fix the FAIL above and re-run `agentreplay doctor`.", file=sys.stderr)
+    return 1
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command == "doctor":
+        return _cmd_doctor(args)
     if args.command == "replay":
         return _cmd_replay(args)
     if args.command == "fixture":
         return _cmd_fixture(args)
     if args.command == "generate-test":
         return _cmd_generate_test(args)
+    if args.command == "ci" and args.ci_command == "gate":
+        return _cmd_ci_gate(args)
     parser.print_help()
     return 1
 

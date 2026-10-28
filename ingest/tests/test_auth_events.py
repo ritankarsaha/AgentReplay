@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .conftest import OTHER_API_KEY, auth_headers
+from .conftest import TEST_API_KEY, auth_headers, viewer_headers
 
 
 def _login_body(**overrides) -> dict:
@@ -17,13 +17,13 @@ def _login_body(**overrides) -> dict:
 
 
 async def test_create_login_event(client):
-    resp = await client.post("/v1/auth-events", json=_login_body(), headers=auth_headers())
+    resp = await client.post("/v1/auth-events", json=_login_body(), headers=viewer_headers())
     assert resp.status_code == 201
     body = resp.json()
     assert body["email"] == "founder@example.com"
     assert body["name"] == "Ritankar Saha"
     assert body["provider"] == "google"
-    assert body["project_id"] == "test-project"
+    assert body["project_id"] == "viewer"
     assert body["id"]
     assert body["created_at"]
 
@@ -32,7 +32,7 @@ async def test_create_login_event_optional_fields(client):
     resp = await client.post(
         "/v1/auth-events",
         json=_login_body(name=None, image=None),
-        headers=auth_headers(),
+        headers=viewer_headers(),
     )
     assert resp.status_code == 201
     body = resp.json()
@@ -48,12 +48,12 @@ async def test_create_login_event_requires_auth(client):
 async def test_create_login_event_missing_email(client):
     body = _login_body()
     del body["email"]
-    resp = await client.post("/v1/auth-events", json=body, headers=auth_headers())
+    resp = await client.post("/v1/auth-events", json=body, headers=viewer_headers())
     assert resp.status_code == 422
 
 
 async def test_list_login_events_empty(client):
-    resp = await client.get("/v1/auth-events", headers=auth_headers())
+    resp = await client.get("/v1/auth-events", headers=viewer_headers())
     assert resp.status_code == 200
     assert resp.json() == {"events": []}
 
@@ -66,25 +66,27 @@ async def test_list_login_events_newest_first(client):
     # Postgres's `now()` is microsecond-resolution, so this is a test-double
     # artifact, not a production concern.
     await client.post(
-        "/v1/auth-events", json=_login_body(email="first@example.com"), headers=auth_headers()
+        "/v1/auth-events", json=_login_body(email="first@example.com"), headers=viewer_headers()
     )
     await asyncio.sleep(1.1)
     await client.post(
-        "/v1/auth-events", json=_login_body(email="second@example.com"), headers=auth_headers()
+        "/v1/auth-events", json=_login_body(email="second@example.com"), headers=viewer_headers()
     )
 
-    resp = await client.get("/v1/auth-events", headers=auth_headers())
+    resp = await client.get("/v1/auth-events", headers=viewer_headers())
     assert resp.status_code == 200
     emails = [e["email"] for e in resp.json()["events"]]
     assert emails == ["second@example.com", "first@example.com"]
 
 
-async def test_list_login_events_scoped_to_project(client):
-    await client.post("/v1/auth-events", json=_login_body(), headers=auth_headers())
+async def test_login_events_reject_project_api_keys(client):
+    """Sign-ins are an operator-wide log: a tenant's own API key must not read it."""
+    await client.post("/v1/auth-events", json=_login_body(), headers=viewer_headers())
 
-    resp = await client.get("/v1/auth-events", headers=auth_headers(OTHER_API_KEY))
-    assert resp.status_code == 200
-    assert resp.json() == {"events": []}
+    resp = await client.get("/v1/auth-events", headers=auth_headers(TEST_API_KEY))
+    assert resp.status_code == 401
+    resp = await client.post("/v1/auth-events", json=_login_body(), headers=auth_headers(TEST_API_KEY))
+    assert resp.status_code == 401
 
 
 async def test_list_login_events_requires_auth(client):
@@ -95,9 +97,9 @@ async def test_list_login_events_requires_auth(client):
 async def test_list_login_events_respects_limit(client):
     for i in range(3):
         await client.post(
-            "/v1/auth-events", json=_login_body(email=f"user{i}@example.com"), headers=auth_headers()
+            "/v1/auth-events", json=_login_body(email=f"user{i}@example.com"), headers=viewer_headers()
         )
 
-    resp = await client.get("/v1/auth-events?limit=2", headers=auth_headers())
+    resp = await client.get("/v1/auth-events?limit=2", headers=viewer_headers())
     assert resp.status_code == 200
     assert len(resp.json()["events"]) == 2

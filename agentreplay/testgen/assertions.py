@@ -207,3 +207,25 @@ def assert_semantic(
         return
     judgment = judge_fn(actual_output, rubric)
     assert judgment.passes, f"semantic judge rejected the output: {judgment.reasoning}"
+
+
+def run_assertion_spec(
+    spec: Optional[dict],
+    *,
+    tool_run: RecordedRun,
+    result: Any,
+    exception: Optional[BaseException],
+) -> None:
+    """Run every check in an assertion spec, same order/skip semantics as the
+    rendered pytest file — a no-op if `spec` is falsy. Shared by
+    `test_template.py`'s rendered tests and the N-trial regression runner so
+    both judge a spec identically.
+    """
+    if not spec:
+        return
+    if bool(spec.get("no_exception", True)):
+        assert_no_exception(exception)
+    assert_must_call_tools(tool_run, spec.get("must_call_tools") or [])
+    assert_must_not_call_tools(tool_run, spec.get("must_not_call_tools") or [])
+    assert_max_steps(tool_run, spec.get("max_steps"))
+    assert_semantic(result, spec.get("semantic_rubric"))

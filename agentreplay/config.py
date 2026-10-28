@@ -5,7 +5,9 @@ from typing import Callable, Optional
 
 RedactFn = Callable[[dict], dict]
 
-DEFAULT_ENDPOINT = "https://ingest.agentreplay.dev"
+# The hosted ingest API. Override with AGENTREPLAY_ENDPOINT / init(endpoint=...)
+# to self-host or to point at a local `uvicorn app.main:app`.
+DEFAULT_ENDPOINT = "https://agentreplay-ingest.fly.dev"
 
 
 @dataclass(frozen=True)

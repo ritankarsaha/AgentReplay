@@ -20,3 +20,6 @@ supabase/.temp/
 .claude
 .agents
 .agents/skills
+# Local Redis dumps
+dump.rdb
+*.rdb

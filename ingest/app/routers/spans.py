@@ -10,6 +10,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..deps import get_current_project
 from ..models import Project
+from ..security import rate_limiter
 from ..schemas import IngestResponse, SpanBatchIn
 from ..tasks import enqueue_classification
 
@@ -32,19 +33,33 @@ async def ingest_spans(
     see PROGRESS.md Blockers), so ingestion never fails or stalls on a
     missing key.
     """
-    if batch.project_id != project.id:
+    settings = get_settings()
+    if len(batch.spans) > settings.max_spans_per_batch:
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            f"Batch too large ({len(batch.spans)} spans; max {settings.max_spans_per_batch})",
+        )
+    rate_limiter.check(
+        f"ingest:{project.id}", limit=settings.ingest_rate_limit_per_min,
+        window_seconds=60, label="requests",
+    )
+
+    if batch.project_id is not None and batch.project_id != project.id:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "project_id in request body does not match the authenticated project",
         )
 
-    accepted, failed_run_ids = await crud.ingest_batch(
-        db,
-        project_id=project.id,
-        spans=batch.spans,
-        agent_version=batch.agent_version,
-        framework=batch.framework,
-    )
+    try:
+        accepted, failed_run_ids = await crud.ingest_batch(
+            db,
+            project_id=project.id,
+            spans=batch.spans,
+            agent_version=batch.agent_version,
+            framework=batch.framework,
+        )
+    except crud.ForeignRunError:
+        raise HTTPException(status.HTTP_409_CONFLICT, "run_id belongs to a different project")
 
     if failed_run_ids and get_settings().classifier_configured:
         for run_id in failed_run_ids:

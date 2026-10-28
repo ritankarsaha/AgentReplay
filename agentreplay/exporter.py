@@ -46,6 +46,7 @@ class BackgroundExporter:
         self._client = client or _build_client(config)
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._warned_auth = False
 
     def start(self) -> None:
         if self._thread is not None:
@@ -97,15 +98,16 @@ class BackgroundExporter:
         if not payload_spans:
             return
 
-        body = json.dumps(
-            {
-                "project_id": self._config.project_id,
-                "agent_version": self._config.agent_version,
-                "framework": self._config.framework,
-                "spans": payload_spans,
-            },
-            default=str,
-        ).encode("utf-8")
+        body_dict = {
+            "agent_version": self._config.agent_version,
+            "framework": self._config.framework,
+            "spans": payload_spans,
+        }
+        if self._config.project_id:
+            # Optional: the API key already identifies the project; if sent,
+            # the server rejects a mismatch (catches a mis-pasted key early).
+            body_dict["project_id"] = self._config.project_id
+        body = json.dumps(body_dict, default=str).encode("utf-8")
 
         try:
             response = self._client.post(
@@ -122,6 +124,13 @@ class BackgroundExporter:
                     f"{len(payload_spans)} span(s): {response.text[:200]}",
                     file=sys.stderr,
                 )
+                if response.status_code == 401 and not self._warned_auth:
+                    self._warned_auth = True
+                    print(
+                        "agentreplay: the API key was rejected -- check AGENTREPLAY_API_KEY, "
+                        "or run `agentreplay doctor` to diagnose your setup.",
+                        file=sys.stderr,
+                    )
         except httpx.HTTPError as exc:
             print(
                 f"agentreplay: failed to export {len(payload_spans)} span(s): {exc}",

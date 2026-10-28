@@ -302,3 +302,18 @@ def test_end_to_end_span_recorded_then_flushed(monkeypatch):
     agentreplay.flush()
 
     assert agentreplay.get_recorded_spans() == []
+
+
+def test_exporter_omits_project_id_when_unset():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(202, json={"accepted": 1})
+
+    config = Config(api_key="key", enabled=True)
+    collector = SpanCollector()
+    collector.add(Span(id=str(uuid.uuid4()), parent_id=None, error=None, run_id="r", type="llm", name="n", input={}, output={}, started_at=datetime.now(timezone.utc), duration_ms=1.0, fingerprint="f"))
+    exporter = BackgroundExporter(config, collector=collector, client=httpx.Client(transport=httpx.MockTransport(handler), base_url="http://t"))
+    exporter.flush()
+    assert "project_id" not in captured["body"]

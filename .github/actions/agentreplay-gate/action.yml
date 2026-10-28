@@ -1,0 +1,91 @@
+name: "AgentReplay Regression Gate"
+description: >
+  Runs every active AgentReplay regression case against this checkout's
+  agent code (Mode B — live LLM calls, mocked tools) and blocks the PR on a
+  P0/blocking regression.
+author: "AgentReplay"
+
+inputs:
+  endpoint:
+    description: "AgentReplay ingest API base URL"
+    required: false
+    default: "https://ingest.agentreplay.dev"
+  api-key:
+    description: "AgentReplay ingest API key (pass a repo/org secret, never hardcode)"
+    required: true
+  trials:
+    description: "Trials per case"
+    required: false
+    default: "3"
+  python-version:
+    description: "Python version to run the gate under"
+    required: false
+    default: "3.11"
+  working-directory:
+    description: "Directory to install/run from (where the agent's own requirements live)"
+    required: false
+    default: "."
+  post-comment:
+    description: "Whether to post the verdict table as a sticky PR comment"
+    required: false
+    default: "true"
+
+outputs:
+  verdict:
+    description: "Overall gate verdict: pass | warn | fail | insufficient_evidence"
+    value: ${{ steps.gate.outputs.verdict }}
+  report-path:
+    description: "Path to the rendered Markdown report"
+    value: ${{ steps.gate.outputs.report-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install agentreplay
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: pip install agentreplay
+
+    - name: Run regression gate
+      id: gate
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        AGENTREPLAY_ENDPOINT: ${{ inputs.endpoint }}
+        AGENTREPLAY_API_KEY: ${{ inputs.api-key }}
+      run: |
+        set +e
+        agentreplay ci gate --trials "${{ inputs.trials }}" \
+          --agent-version "${{ github.sha }}" \
+          --output agentreplay-gate-report.md
+        exit_code=$?
+        set -e
+
+        verdict="unknown"
+        if grep -qo '`fail`' agentreplay-gate-report.md; then verdict="fail"; fi
+        if grep -qo '`warn`' agentreplay-gate-report.md; then verdict="warn"; fi
+        if grep -qo '`insufficient_evidence`' agentreplay-gate-report.md; then verdict="insufficient_evidence"; fi
+        if grep -qo '`pass`' agentreplay-gate-report.md; then verdict="pass"; fi
+
+        {
+          echo "verdict=$verdict"
+          echo "report-path=$(pwd)/agentreplay-gate-report.md"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          cat agentreplay-gate-report.md >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        exit $exit_code
+
+    - name: Post PR comment
+      if: ${{ inputs.post-comment == 'true' && github.event_name == 'pull_request' }}
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: agentreplay-gate
+        path: ${{ steps.gate.outputs.report-path }}

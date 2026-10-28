@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .models import LoginEvent, Run, SpanModel
+from .models import LoginEvent, RegressionCase, Run, SpanModel, TestResult
 
 
 
@@ -31,11 +31,13 @@ class SpanIn(BaseModel):
 class SpanBatchIn(BaseModel):
     """Body of `POST /v1/spans` — see `agentreplay/exporter.py` SPANS_PATH contract."""
 
-    project_id: str
+    # Optional: the API key already identifies the project. If supplied it
+    # must match (routers/spans.py), which catches a mis-pasted key early.
+    project_id: Optional[str] = None
 
     agent_version: Optional[str] = None
     framework: Optional[str] = None
-    spans: List[SpanIn]
+    spans: List[SpanIn] = Field(max_length=5000)
 
 
 class IngestResponse(BaseModel):
@@ -158,6 +160,140 @@ def run_to_out(run: Run) -> RunOut:
 def run_to_detail_out(run: Run) -> RunDetailOut:
     base = run_to_out(run)
     return RunDetailOut(**base.model_dump(), spans=[span_to_out(s) for s in run.spans])
+
+
+class RegisterCaseRequest(BaseModel):
+    """Body of `POST /v1/regression-cases` — promote a run's failure into a case."""
+
+    run_id: str
+    entrypoint: str
+    title: Optional[str] = None
+    priority: str = "P1"
+    created_by: Optional[str] = None
+
+
+class CaptureProductionRequest(BaseModel):
+    """Body of `POST /v1/regression-cases/capture-production` — capture an
+    incident with no full recorded run behind it.
+    """
+
+    entrypoint: str
+    recorded_input: Any = None
+    tool_spans: List[dict] = []
+    assertion_spec: Optional[dict] = None
+    title: Optional[str] = None
+    priority: str = "P1"
+    source_case_key: Optional[str] = None
+    incident_id: Optional[str] = None
+    external_url: Optional[str] = None
+    observed_at: Optional[datetime] = None
+    failure_class: Optional[str] = None
+    created_by: Optional[str] = None
+
+
+class UpdateCaseStatusRequest(BaseModel):
+    """Body of `PATCH /v1/regression-cases/{case_id}` — a status transition."""
+
+    status: str
+
+
+class RegressionCaseOut(BaseModel):
+    id: str
+    project_id: str
+    source_run_id: Optional[str]
+    title: str
+    entrypoint: str
+    recorded_input: Any
+    tool_spans: List[dict]
+    assertion_spec: Optional[dict]
+    priority: str
+    status: str
+    evidence_level: str
+    source_case_key: Optional[str]
+    incident_id: Optional[str]
+    external_url: Optional[str]
+    observed_at: Optional[datetime]
+    created_by: Optional[str]
+    metadata: dict
+    created_at: datetime
+    updated_at: datetime
+
+
+class RegressionCaseListOut(BaseModel):
+    cases: List[RegressionCaseOut]
+
+
+class TestResultTrialOut(BaseModel):
+    trial: int
+    passed: bool
+    error: Optional[str] = None
+    duration_ms: float = 0.0
+
+
+class RegisterResultRequest(BaseModel):
+    """Body of `POST /v1/regression-cases/{case_id}/results`."""
+
+    agent_version: Optional[str] = None
+    trials: int
+    passes: int
+    verdict: str
+    details: List[TestResultTrialOut] = []
+
+
+class TestResultOut(BaseModel):
+    id: str
+    case_id: str
+    agent_version: Optional[str]
+    trials: int
+    passes: int
+    pass_rate: float
+    verdict: str
+    details: list
+    judged_at: datetime
+    created_at: datetime
+
+
+class TestResultListOut(BaseModel):
+    results: List[TestResultOut]
+
+
+def regression_case_to_out(case: RegressionCase) -> RegressionCaseOut:
+    return RegressionCaseOut(
+        id=case.id,
+        project_id=case.project_id,
+        source_run_id=case.source_run_id,
+        title=case.title,
+        entrypoint=case.entrypoint,
+        recorded_input=case.recorded_input,
+        tool_spans=case.tool_spans,
+        assertion_spec=case.assertion_spec,
+        priority=case.priority,
+        status=case.status,
+        evidence_level=case.evidence_level,
+        source_case_key=case.source_case_key,
+        incident_id=case.incident_id,
+        external_url=case.external_url,
+        observed_at=case.observed_at,
+        created_by=case.created_by,
+        metadata=case.extra_metadata,
+        created_at=case.created_at,
+        updated_at=case.updated_at,
+    )
+
+
+def test_result_to_out(result: TestResult) -> TestResultOut:
+    return TestResultOut(
+        id=result.id,
+        case_id=result.case_id,
+        agent_version=result.agent_version,
+        trials=result.trials,
+        passes=result.passes,
+        pass_rate=result.pass_rate,
+        verdict=result.verdict,
+        details=result.details,
+        judged_at=result.judged_at,
+        created_at=result.created_at,
+    )
 
 
 class LoginEventIn(BaseModel):

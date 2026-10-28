@@ -10,7 +10,8 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from .models import LoginEvent, Project, Run, SpanModel
+from .security import generate_api_key, generate_project_id, hash_api_key
+from .models import LoginEvent, Project, RegressionCase, Run, SpanModel, TestResult
 from .schemas import SpanIn
 
 # Must match `agentreplay/fail.py`'s `FAIL_SPAN_TYPE`/`FAIL_SPAN_NAME` — the
@@ -29,7 +30,53 @@ def _insert(session: AsyncSession, table: Table):
 
 
 async def get_project_by_api_key(session: AsyncSession, api_key: str) -> Optional[Project]:
-    return await session.scalar(select(Project).where(Project.api_key == api_key))
+    return await session.scalar(
+        select(Project).where(Project.api_key_hash == hash_api_key(api_key))
+    )
+
+
+async def get_project_for_owner(
+    session: AsyncSession, *, project_id: str, owner_email: str
+) -> Optional[Project]:
+    return await session.scalar(
+        select(Project).where(Project.id == project_id, Project.owner_email == owner_email)
+    )
+
+
+async def list_projects_for_owner(session: AsyncSession, *, owner_email: str) -> List[Project]:
+    result = await session.scalars(
+        select(Project).where(Project.owner_email == owner_email).order_by(Project.created_at)
+    )
+    return list(result)
+
+
+async def create_project(
+    session: AsyncSession, *, name: str, owner_email: Optional[str]
+) -> Tuple[Project, str]:
+    """Create a project and return it with its one-time plaintext API key."""
+    api_key, key_hash, prefix = generate_api_key()
+    project = Project(
+        id=generate_project_id(),
+        name=name,
+        api_key_hash=key_hash,
+        api_key_prefix=prefix,
+        owner_email=owner_email,
+    )
+    session.add(project)
+    await session.flush()
+    return project, api_key
+
+
+async def rotate_project_key(session: AsyncSession, project: Project) -> str:
+    api_key, key_hash, prefix = generate_api_key()
+    project.api_key_hash = key_hash
+    project.api_key_prefix = prefix
+    await session.flush()
+    return api_key
+
+
+class ForeignRunError(Exception):
+    """A batch referenced a `run_id` that already belongs to another project."""
 
 
 async def upsert_run(
@@ -161,6 +208,15 @@ async def ingest_batch(
     if not spans:
         return 0, set()
 
+    # Tenancy guard: `runs.id` is globally unique, so without this a project
+    # could append spans to (and bump) another project's run by reusing its id.
+    batch_run_ids = {s.run_id for s in spans}
+    owners = await session.execute(
+        select(Run.id, Run.project_id).where(Run.id.in_(batch_run_ids))
+    )
+    if any(owner != project_id for _, owner in owners):
+        raise ForeignRunError("run_id belongs to a different project")
+
     first_seen: dict[str, datetime] = {}
     last_seen: dict[str, datetime] = {}
     for span in spans:
@@ -224,6 +280,71 @@ async def get_run_with_spans_by_id(session: AsyncSession, *, run_id: str) -> Opt
     return result.scalar_one_or_none()
 
 
+async def list_regression_cases(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> List[RegressionCase]:
+    """`status=None` returns every status; the CI gate always passes `status="active"`."""
+    stmt = select(RegressionCase).where(RegressionCase.project_id == project_id)
+    if status is not None:
+        stmt = stmt.where(RegressionCase.status == status)
+    stmt = stmt.order_by(RegressionCase.created_at.desc()).limit(limit)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_regression_case(
+    session: AsyncSession, *, project_id: str, case_id: str
+) -> Optional[RegressionCase]:
+    stmt = select(RegressionCase).where(
+        RegressionCase.project_id == project_id, RegressionCase.id == case_id
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def insert_test_result(
+    session: AsyncSession,
+    *,
+    case_id: str,
+    agent_version: Optional[str],
+    trials: int,
+    passes: int,
+    verdict: str,
+    details: list,
+) -> TestResult:
+    result = TestResult(
+        id=str(uuid.uuid4()),
+        case_id=case_id,
+        agent_version=agent_version,
+        trials=trials,
+        passes=passes,
+        pass_rate=(passes / trials) if trials else 0.0,
+        verdict=verdict,
+        details=details,
+    )
+    session.add(result)
+    await session.flush()
+    await session.refresh(result)
+    return result
+
+
+async def list_test_results(
+    session: AsyncSession, *, case_id: str, limit: int = 50
+) -> List[TestResult]:
+    stmt = (
+        select(TestResult)
+        .where(TestResult.case_id == case_id)
+        .order_by(TestResult.created_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def insert_login_event(
     session: AsyncSession,
     *,
@@ -247,10 +368,10 @@ async def insert_login_event(
     return event
 
 
-async def list_login_events(session: AsyncSession, *, project_id: str, limit: int = 50) -> List[LoginEvent]:
+async def list_login_events(session: AsyncSession, *, limit: int = 50) -> List[LoginEvent]:
+    """All sign-ins, newest first -- an operator-wide audit log, not tenant data."""
     stmt = (
         select(LoginEvent)
-        .where(LoginEvent.project_id == project_id)
         .order_by(LoginEvent.created_at.desc())
         .limit(limit)
     )

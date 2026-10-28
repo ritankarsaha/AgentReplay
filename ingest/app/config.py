@@ -44,6 +44,19 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000"
 
+    # Shared secret the Next.js viewer (server-side only) presents to act on
+    # behalf of a signed-in user: it authenticates as this token plus
+    # `X-Viewer-Email` (verified by Auth.js) and optionally `X-Project-Id`.
+    # Unset = viewer delegation disabled (project API keys still work).
+    viewer_service_token: Optional[str] = None
+
+    # Public-use guard rails (see app/security.py: in-process limiter).
+    max_request_bytes: int = 5_000_000
+    max_spans_per_batch: int = 1000
+    ingest_rate_limit_per_min: int = 600
+    llm_rate_limit_per_hour: int = 30
+    max_projects_per_user: int = 5
+
     # Celery + classifier (chunk 3.6, CLAUDE.md §3.6). `redis_url` doubles as
     # both Celery broker and result backend — one moving part, not two.
     redis_url: str = DEFAULT_REDIS_URL

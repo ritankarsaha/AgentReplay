@@ -1,20 +1,24 @@
 import { Suspense } from "react";
 
-import { EmptyState } from "@/components/empty-state";
+import { AutoRefresh } from "@/components/auto-refresh";
+import { Quickstart } from "@/components/quickstart";
 import { RunsOverview } from "@/components/runs-overview";
 import { RunsTable } from "@/components/runs-table";
 import { RunsTableSkeleton } from "@/components/runs-table-skeleton";
 import { getRuns } from "@/lib/api";
+import { getViewerContext, requireProjectScope } from "@/lib/viewer";
 
 async function RunsTableSection() {
-  const runs = await getRuns();
+  const scope = await requireProjectScope();
+  const runs = await getRuns(scope);
 
   if (runs.length === 0) {
+    const { active } = await getViewerContext();
     return (
-      <EmptyState
-        title="No runs yet"
-        description="Run an instrumented agent (e.g. `python examples/resume_bot.py` from the repo root) — runs will appear here once spans are ingested."
-      />
+      <div className="flex flex-col gap-4">
+        <AutoRefresh intervalMs={5000} />
+        <Quickstart projectName={active?.name ?? "your project"} keyPrefix={active?.api_key_prefix ?? null} />
+      </div>
     );
   }
 

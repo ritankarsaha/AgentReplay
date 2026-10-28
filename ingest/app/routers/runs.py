@@ -13,6 +13,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..deps import get_current_project
 from ..models import Project
+from ..security import rate_limiter
 from ..schemas import (
     AssertionSpecOut,
     GenerateTestOut,
@@ -25,6 +26,14 @@ from ..schemas import (
 from ..testgen import EntrypointFormatError, generate_test_files_for_run
 
 router = APIRouter(tags=["runs"])
+
+
+def _check_llm_budget(project: Project) -> None:
+    """Assertion-spec generation calls a paid LLM -- cap it per project."""
+    rate_limiter.check(
+        f"llm:{project.id}", limit=get_settings().llm_rate_limit_per_hour,
+        window_seconds=3600, label="LLM-backed requests",
+    )
 
 
 @router.get("/v1/runs", response_model=RunListOut)
@@ -72,6 +81,7 @@ async def create_assertion_spec(
     run = await crud.get_run_with_spans(db, project_id=project.id, run_id=run_id)
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    _check_llm_budget(project)
 
     try:
         spec = await generate_assertion_spec_for_run(run, db, get_settings())
@@ -103,6 +113,7 @@ async def create_generated_test(
     run = await crud.get_run_with_spans(db, project_id=project.id, run_id=run_id)
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    _check_llm_budget(project)
 
     try:
         result = await generate_test_files_for_run(run, body.entrypoint, db, get_settings())

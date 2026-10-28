@@ -78,7 +78,7 @@ def init(
     """Initialize the AgentReplay SDK.
 
     Explicit arguments take precedence over the AGENTREPLAY_API_KEY,
-    AGENTREPLAY_PROJECT_ID, AGENTREPLAY_ENDPOINT, AGENTREPLAY_ENVIRONMENT,
+    AGENTREPLAY_PROJECT_ID (optional -- the API key already identifies the project), AGENTREPLAY_ENDPOINT, AGENTREPLAY_ENVIRONMENT,
     AGENTREPLAY_AGENT_VERSION, AGENTREPLAY_FRAMEWORK, and
     AGENTREPLAY_CAPTURE_NONDETERMINISM environment variables. Pass
     enabled=False to run in local no-op mode without credentials (e.g.
@@ -114,11 +114,11 @@ def init(
         else os.environ.get("AGENTREPLAY_CAPTURE_NONDETERMINISM", "").lower() in ("1", "true", "yes")
     )
 
-    if enabled and (not resolved_api_key or not resolved_project_id):
+    if enabled and not resolved_api_key:
         raise ConfigurationError(
-            "agentreplay.init() requires 'api_key' and 'project_id' "
-            "(directly or via AGENTREPLAY_API_KEY / AGENTREPLAY_PROJECT_ID env vars). "
-            "Pass enabled=False to run in local no-op mode without these."
+            "agentreplay.init() requires an 'api_key' "
+            "(directly or via the AGENTREPLAY_API_KEY env var). Create one in the "
+            "AgentReplay dashboard, or pass enabled=False to run in local no-op mode."
         )
 
     config = Config(

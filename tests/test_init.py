@@ -2,6 +2,7 @@ import pytest
 
 import agentreplay
 from agentreplay import _state
+from agentreplay.config import DEFAULT_ENDPOINT
 from agentreplay.exceptions import ConfigurationError
 
 ENV_VARS = (
@@ -28,7 +29,7 @@ def test_init_with_explicit_args():
 
     assert config.api_key == "key123"
     assert config.project_id == "proj1"
-    assert config.endpoint == "https://ingest.agentreplay.dev"
+    assert config.endpoint == DEFAULT_ENDPOINT
     assert config.environment == "development"
     assert config.enabled is True
     assert agentreplay.is_initialized() is True
@@ -171,3 +172,10 @@ def test_detect_git_sha_returns_stripped_stdout(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Result())
 
     assert agentreplay._detect_git_sha() == "abc1234"
+
+
+def test_init_does_not_require_project_id(monkeypatch):
+    monkeypatch.delenv("AGENTREPLAY_PROJECT_ID", raising=False)
+    config = agentreplay.init(api_key="key-only")
+    assert config.api_key == "key-only"
+    assert config.project_id is None

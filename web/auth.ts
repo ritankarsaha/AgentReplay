@@ -4,12 +4,11 @@ import Google from "next-auth/providers/google";
 import { postLoginEvent } from "@/lib/api";
 
 /**
- * Google sign-in for the viewer (replaces the HTTP Basic Auth stopgap in
- * the prior `middleware.ts`). Any Google account can sign in -- this is a
- * deliberate, explicit project-owner choice, not a default: the viewer
- * shows real production LLM traces, so this is a much weaker boundary than
- * an allow-list. `ALLOWED_EMAILS` below is the one-line hook to tighten
- * that later without restructuring anything.
+ * Google sign-in for the viewer. Any Google account can sign in (self-serve
+ * hosted): tenant isolation is NOT this file's job -- every data request
+ * carries the verified email to the ingest API, which only returns projects
+ * that email owns. `AUTH_ALLOWED_EMAILS` remains as a private-beta switch
+ * (set it to restrict sign-in to a list; leave unset for open signup).
  */
 const ALLOWED_EMAILS = process.env.AUTH_ALLOWED_EMAILS?.split(",")
   .map((email) => email.trim().toLowerCase())

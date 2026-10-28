@@ -45,12 +45,15 @@ class GeneratedTestFiles:
     assertion_spec: Optional[dict]
 
 
-def _validate_entrypoint_shape(entrypoint: str) -> None:
+def validate_entrypoint_shape(entrypoint: str) -> None:
+    """Shape-only check (`module.path:function_name`) — never imports/resolves it,
+    since the ingest server never has the user's agent code available.
+    """
     if not _ENTRYPOINT_RE.match(entrypoint):
         raise EntrypointFormatError(entrypoint)
 
 
-def _span_to_fixture_dict(span: SpanModel) -> dict:
+def span_to_fixture_dict(span: SpanModel) -> dict:
     """`SpanModel` (ORM) -> the dict shape `build_fixture_data()` accepts.
 
     Mirrors `schemas.py: span_to_out()` field-for-field, except `started_at`
@@ -58,6 +61,9 @@ def _span_to_fixture_dict(span: SpanModel) -> dict:
     generated fixture's `TOOL_SPANS` literal matches exactly what the CLI
     path produces (which goes through a JSON round-trip via `fetch_run()`,
     where `started_at` is necessarily already a string).
+
+    Public (not `_`-prefixed) because `app/regression.py` needs the same
+    conversion — both are `ingest/app` internals.
     """
     return {
         "id": span.id,
@@ -95,7 +101,7 @@ async def generate_test_files_for_run(
     assertion spec yet and needs one generated; a run that already has one
     persisted skips straight to rendering, even if Sonnet is unconfigured.
     """
-    _validate_entrypoint_shape(entrypoint)
+    validate_entrypoint_shape(entrypoint)
 
     diagnosis = run.diagnosis or {}
     assertion_spec = diagnosis.get("assertion_spec")
@@ -103,7 +109,7 @@ async def generate_test_files_for_run(
         spec = await generate_assertion_spec_for_run(run, session, settings, generate_fn=generate_fn)
         assertion_spec = spec.to_dict()
 
-    fixture = build_fixture_data(run.id, [_span_to_fixture_dict(s) for s in run.spans])
+    fixture = build_fixture_data(run.id, [span_to_fixture_dict(s) for s in run.spans])
     slug = slugify_run_id(run.id)
     fixture_filename = f"fixture_{slug}.py"
 
