@@ -25,3 +25,6 @@ dump.rdb
 *.rdb
 CLAUDE1.md
 PROGRESS-HACKATHON.md
+
+# Local blob store for screenshots/HTML captured by the control plane
+.agentreplay/
