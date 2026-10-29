@@ -2,7 +2,10 @@ import { Crosshair } from "lucide-react";
 
 import { ErrorBanner } from "@/components/error-banner";
 import { JsonViewer } from "@/components/json-viewer";
+import { FACT_SPAN_TYPES, SpanFacts } from "@/components/span-facts";
 import { SpanTypeBadge } from "@/components/span-type-badge";
+import { Tag } from "@/components/ui/tag";
+import { spanBadges } from "@/lib/span-badges";
 import { formatDuration, formatTimestamp } from "@/lib/format";
 import { SPAN_TYPE_COLORS } from "@/lib/span-colors";
 import { timelinePosition, type TimeBounds } from "@/lib/span-timing";
@@ -40,6 +43,7 @@ export function SpanRow({
   const { offsetPct, widthPct } = timelinePosition(span, bounds);
   const rowTint = isCulprit ? "" : index % 2 === 1 ? "bg-white/[0.02]" : "";
   const showDetails = Boolean(span.error) || hasContent(span.input) || hasContent(span.output);
+  const badges = spanBadges(span);
 
   return (
     <div className="contents">
@@ -53,6 +57,11 @@ export function SpanRow({
       >
         <SpanTypeBadge type={span.type} />
         <span className="span-row__name">{span.name}</span>
+        {badges.map((badge) => (
+          <Tag key={badge.label} tone={badge.tone} title={badge.hint}>
+            {badge.label}
+          </Tag>
+        ))}
         {isCulprit && (
           <span
             className="flex items-center gap-1 font-mono text-xs text-status-failure"
@@ -76,6 +85,7 @@ export function SpanRow({
       {showDetails && (
         <div className="span-row__details">
           {span.error && <ErrorBanner error={span.error} />}
+          {FACT_SPAN_TYPES.has(span.type) && <SpanFacts span={span} />}
           <div className="span-row__payloads">
             <JsonViewer data={span.input} label="input" />
             <JsonViewer data={span.output} label="output" />

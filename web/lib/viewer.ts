@@ -55,3 +55,19 @@ export async function projectScopeOrNull(): Promise<ViewerScope | null> {
   const { active } = await getViewerContext();
   return active ? { email, projectId: active.id } : null;
 }
+
+/** Like `requireProjectScope`, but never redirects: for chrome that renders on every page, including /signin. */
+export const getOptionalScope = cache(async (): Promise<ViewerScope | null> => {
+  const session = await auth();
+  const email = session?.user?.email?.toLowerCase();
+  if (!email) return null;
+  try {
+    const projects = await listProjects(email);
+    const selected = (await cookies()).get(PROJECT_COOKIE)?.value;
+    const active = projects.find((p) => p.id === selected) ?? projects[0];
+    return active ? { email, projectId: active.id } : null;
+  } catch (err) {
+    console.error("[viewer] failed to resolve scope:", err);
+    return null;
+  }
+});

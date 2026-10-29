@@ -85,6 +85,7 @@ jobs:
       - run: npx next typegen
       - run: npx tsc --noEmit
       - run: npx eslint app components lib auth.ts
+      - run: npm test
       - run: npm run build
 
   ci-ok:

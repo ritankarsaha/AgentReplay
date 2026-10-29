@@ -93,7 +93,7 @@ def test_claim_without_a_trust_score_uses_the_restricted_band(travelbot_trace):
 def test_pipeline_options_skip_classification_and_case_registration(travelbot_trace):
     client = FakeClient(travelbot_trace, classify=ControlPlaneError("must not be called"), trust={"band": "standard", "score": 640})
     report = IncidentPipeline(client, classify=False, register_regression_case=False).process("inc-1")
-    assert report.notes == [] and client.cases == [] and report.case is None
+    assert not any("classif" in n for n in report.notes) and client.cases == [] and report.case is None
 
 
 def test_trace_without_a_request_is_stored_with_a_note_and_no_filings():

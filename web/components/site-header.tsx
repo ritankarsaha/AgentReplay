@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import Image from "next/image";
-import { FolderKanban, LogOut, Users } from "lucide-react";
+import { Bot, FolderKanban, LogOut, Scale, ShieldAlert, Users } from "lucide-react";
 
 import { auth, signOut } from "@/auth";
 import { Logo, Wordmark } from "@/components/logo";
@@ -35,6 +35,22 @@ export async function SiteHeader() {
             <Logo />
             <Wordmark />
           </Link>
+          {email && (
+            <>
+              <Link href="/agents" className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+                <Bot className="size-3.5" />
+                Agents
+              </Link>
+              <Link href="/incidents" className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+                <ShieldAlert className="size-3.5" />
+                Incidents
+              </Link>
+              <Link href="/scoreboard" className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+                <Scale className="size-3.5" />
+                Scoreboard
+              </Link>
+            </>
+          )}
           {email && (
             <Link
               href="/projects"

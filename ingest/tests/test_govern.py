@@ -303,3 +303,13 @@ async def test_classify_incident_run(client, monkeypatch):
     assert done.json()["failure_class"] == "disobey_task_specification"
     assert done.json()["classification_status"] == "done"
     assert (await client.post(f"/v1/incidents/{incident_id}/classify", headers=auth_headers(OTHER_API_KEY))).status_code == 404
+
+
+async def test_incidents_can_be_filtered_by_run(client):
+    await _halted_incident(client, "run-a")
+    await _halted_incident(client, "run-b")
+    h = auth_headers()
+    assert len((await client.get("/v1/incidents", headers=h)).json()) == 2
+    only = (await client.get("/v1/incidents?run_id=run-b", headers=h)).json()
+    assert [i["run_id"] for i in only] == ["run-b"]
+    assert (await client.get("/v1/incidents?run_id=nope", headers=h)).json() == []

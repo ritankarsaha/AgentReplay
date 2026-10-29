@@ -85,6 +85,7 @@ class IncidentOut(BaseModel):
     culprit_span_id: Optional[str]
     status: str
     details: Dict[str, Any] = Field(default_factory=dict)
+    share_token: Optional[str] = None
     created_at: Optional[datetime]
 
 
@@ -291,6 +292,19 @@ async def publish_manifest(
     return _manifest_out(row)
 
 
+@router.get("/v1/agents/{agent_id}/manifests", response_model=List[ManifestOut])
+async def list_manifests(
+    agent_id: str, project: Project = Depends(get_current_project), db: AsyncSession = Depends(get_db)
+) -> List[ManifestOut]:
+    agent = await _agent_or_404(db, project, agent_id)
+    rows = (
+        await db.execute(
+            select(ScopeManifest).where(ScopeManifest.agent_id == agent.id).order_by(ScopeManifest.version.desc())
+        )
+    ).scalars()
+    return [_manifest_out(r) for r in rows]
+
+
 @router.get("/v1/agents/{agent_id}/manifest", response_model=ManifestOut)
 async def current_manifest(
     agent_id: str, project: Project = Depends(get_current_project), db: AsyncSession = Depends(get_db)
@@ -349,6 +363,7 @@ async def revoke_manifest(
 @router.get("/v1/incidents", response_model=List[IncidentOut])
 async def list_incidents(
     agent_id: Optional[str] = None,
+    run_id: Optional[str] = None,
     incident_status: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     project: Project = Depends(get_current_project),
@@ -357,6 +372,8 @@ async def list_incidents(
     stmt = select(Incident).where(Incident.project_id == project.id)
     if agent_id:
         stmt = stmt.where(Incident.agent_id == agent_id)
+    if run_id:
+        stmt = stmt.where(Incident.run_id == run_id)
     if incident_status:
         stmt = stmt.where(Incident.status == incident_status)
     rows = (await db.execute(stmt.order_by(Incident.created_at.desc()).limit(limit))).scalars()
@@ -680,6 +697,19 @@ async def _token_or_404(db: AsyncSession, project: Project, token_id: str) -> Ac
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Token not found")
     return row
+
+
+@router.get("/v1/agents/{agent_id}/tokens", response_model=List[TokenOut])
+async def list_tokens(
+    agent_id: str, project: Project = Depends(get_current_project), db: AsyncSession = Depends(get_db)
+) -> List[TokenOut]:
+    agent = await _agent_or_404(db, project, agent_id)
+    rows = (
+        await db.execute(
+            select(AccessToken).where(AccessToken.agent_id == agent.id).order_by(AccessToken.issued_at.desc())
+        )
+    ).scalars()
+    return [_token_out(r) for r in rows]
 
 
 @router.get("/v1/tokens/{token_id}", response_model=TokenOut)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func, true as sa_true
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, func, true as sa_true
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -265,6 +265,7 @@ class Incident(Base):
     # open | resolved
     status: Mapped[str] = mapped_column(String, nullable=False, default="open", server_default="open")
     details: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict, server_default="{}")
+    share_token: Mapped[Optional[str]] = mapped_column(String, nullable=True, unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -293,4 +294,15 @@ class ModelRun(Base):
     output: Mapped[Optional[Any]] = mapped_column(JSONVariant, nullable=True)
     verdict: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     cost_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Blob(Base):
+    __tablename__ = "blobs"
+
+    project_id: Mapped[str] = mapped_column(String, primary_key=True)
+    sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mime: Mapped[str] = mapped_column(String, nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -1,4 +1,4 @@
-import { CheckCircle2, GitCompare, XCircle } from "lucide-react";
+import { CheckCircle2, GitCompare, OctagonX, XCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import type { RunStatus } from "@/lib/api";
@@ -7,12 +7,14 @@ const STATUS_CLASSES: Record<RunStatus, string> = {
   ok: "border-status-ok/40 text-status-ok bg-status-ok/10",
   failure: "border-status-failure/40 text-status-failure bg-status-failure/10",
   divergence: "border-status-divergence/40 text-status-divergence bg-status-divergence/10",
+  halted: "border-status-failure/60 text-status-failure bg-status-failure/20 font-semibold",
 };
 
 const STATUS_ICONS: Record<RunStatus, typeof CheckCircle2> = {
   ok: CheckCircle2,
   failure: XCircle,
   divergence: GitCompare,
+  halted: OctagonX,
 };
 
 export function StatusBadge({ status }: { status: RunStatus }) {

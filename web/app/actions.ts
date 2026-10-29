@@ -11,7 +11,8 @@ import {
   rotateProjectKey,
   type ProjectWithKey,
 } from "@/lib/api";
-import { PROJECT_COOKIE } from "@/lib/viewer";
+import { disableShare, enableShare, resolveIncident } from "@/lib/control-plane";
+import { PROJECT_COOKIE, projectScopeOrNull } from "@/lib/viewer";
 
 export type KeyActionState =
   | { status: "idle" }
@@ -81,4 +82,34 @@ export async function selectProjectAction(projectId: string): Promise<void> {
   if (!owned) return;
   await rememberProject(projectId);
   revalidatePath("/", "layout");
+}
+
+export type IncidentActionResult = { ok: true; shareToken: string | null } | { ok: false; message: string };
+
+async function incidentScope() {
+  const scope = await projectScopeOrNull();
+  if (!scope) throw new Error("not signed in or no project selected");
+  return scope;
+}
+
+export async function setIncidentShareAction(incidentId: string, enabled: boolean): Promise<IncidentActionResult> {
+  try {
+    const scope = await incidentScope();
+    const { share_token } = enabled ? await enableShare(scope, incidentId) : await disableShare(scope, incidentId);
+    revalidatePath(`/incidents/${incidentId}`);
+    return { ok: true, shareToken: share_token };
+  } catch (err) {
+    return { ok: false, message: err instanceof IngestApiError ? err.message : "Could not update sharing." };
+  }
+}
+
+export async function resolveIncidentAction(incidentId: string): Promise<IncidentActionResult> {
+  try {
+    const scope = await incidentScope();
+    await resolveIncident(scope, incidentId);
+    revalidatePath("/", "layout");
+    return { ok: true, shareToken: null };
+  } catch (err) {
+    return { ok: false, message: err instanceof IngestApiError ? err.message : "Could not resolve the incident." };
+  }
 }

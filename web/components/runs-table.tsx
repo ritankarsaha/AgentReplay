@@ -72,14 +72,14 @@ export function RunsTable({ runs }: { runs: RunOut[] }) {
             </TableCell>
             <TableCell
               className={
-                run.status === "failure"
+                run.status === "failure" || run.status === "halted"
                   ? "font-mono text-sm text-status-failure"
                   : "font-mono text-sm text-muted-foreground"
               }
             >
               <span className="inline-flex items-center gap-1.5">
                 <ClassificationHint run={run} />
-                {run.failure_class ?? "—"}
+                {run.failure_class ?? (run.status === "halted" ? "scope violation" : "—")}
               </span>
             </TableCell>
           </TableRow>

@@ -339,12 +339,15 @@ async def list_regression_cases(
     *,
     project_id: str,
     status: Optional[str] = None,
+    incident_id: Optional[str] = None,
     limit: int = 100,
 ) -> List[RegressionCase]:
     """`status=None` returns every status; the CI gate always passes `status="active"`."""
     stmt = select(RegressionCase).where(RegressionCase.project_id == project_id)
     if status is not None:
         stmt = stmt.where(RegressionCase.status == status)
+    if incident_id is not None:
+        stmt = stmt.where(RegressionCase.incident_id == incident_id)
     stmt = stmt.order_by(RegressionCase.created_at.desc()).limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())

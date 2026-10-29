@@ -37,6 +37,10 @@
   --color-span-llm: var(--span-llm);
   --color-span-tool: var(--span-tool);
   --color-span-checkpoint: var(--span-checkpoint);
+  --color-span-policy: var(--span-policy);
+  --color-span-message: var(--span-message);
+  --color-span-data: var(--span-data);
+  --color-span-negotiation: var(--span-negotiation);
 
   /* run-status colors — shared by StatusBadge. */
   --color-status-ok: var(--status-ok);
@@ -76,6 +80,10 @@
   --span-llm: #bb9af7;
   --span-tool: #7dcfb6;
   --span-checkpoint: #e0af68;
+  --span-policy: #56b6c2;
+  --span-message: #a9b8e8;
+  --span-data: #ff9e64;
+  --span-negotiation: #e5c07b;
 
   /* run status */
   --status-ok: #3fb950;
@@ -143,6 +151,7 @@
 
 .span-row__label {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: center;
   gap: 0.5rem;

@@ -6,10 +6,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from controlplane.blobs import BlobStore
 from controlplane.client import ControlPlaneClient, ControlPlaneError
 from controlplane.learn.causation import TraceFacts, extract_facts, tag_causation
 from controlplane.learn.datahygiene import find_data_findings
+from controlplane.learn import vision
 from controlplane.learn.incident_case import register_case
+from controlplane.learn.walkthrough import Captioner, build_walkthrough
 from controlplane.transact.filings import Narrator, Redactor, build_claim, build_dispute, default_redact
 
 
@@ -25,6 +28,9 @@ class IncidentReport:
     dispute: Optional[dict] = None
     claim: Optional[dict] = None
     case: Optional[dict] = None
+    walkthrough: Optional[Dict[str, Any]] = None
+    annotations: List[Dict[str, Any]] = field(default_factory=list)
+    assets: List[str] = field(default_factory=list)
     facts: Optional[TraceFacts] = None
     spans: List[dict] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -49,6 +55,10 @@ class IncidentPipeline:
         redact: Redactor = default_redact,
         classify: bool = True,
         register_regression_case: bool = True,
+        captioner: Optional[Captioner] = None,
+        blobs: Optional[BlobStore] = None,
+        annotate: bool = False,
+        segment: Callable[[bytes], Dict[str, Any]] = vision.segment,
     ) -> None:
         self.client = client
         self.viewer_url = viewer_url.rstrip("/")
@@ -56,6 +66,10 @@ class IncidentPipeline:
         self.redact = redact
         self.classify = classify
         self.register_regression_case = register_regression_case
+        self.captioner = captioner
+        self.blobs = blobs or BlobStore()
+        self.annotate = annotate
+        self.segment = segment
 
     def process(self, incident_id: str) -> IncidentReport:
         incident = self.client.get_incident(incident_id)
@@ -95,6 +109,8 @@ class IncidentPipeline:
             or incident.get("culprit_span_id")
             or (facts.purchase or {}).get("id")
         )
+        self._visuals(report)
+        report.walkthrough = build_walkthrough(spans, facts, captioner=self.captioner)
         self._store_details(report)
 
         if facts.purchase and facts.message:
@@ -119,8 +135,43 @@ class IncidentPipeline:
                 "causation": report.causation,
                 "data_findings": report.data_findings,
                 "culprit_span_id": report.culprit_span_id,
+                "walkthrough": report.walkthrough,
+                "annotations": report.annotations,
+                "assets": report.assets,
                 "notes": report.notes,
             },
+        )
+
+    def _visuals(self, report: IncidentReport) -> None:
+        """Upload the booking screenshot and, if asked, box the departure chip with SAM 3.1."""
+        shot = ((report.facts.screenshot or {}).get("output") or {}).get("image")
+        if not shot:
+            return
+        png = self.blobs.get(shot["sha256"])
+        if png is None:
+            report.notes.append("screenshot blob not found locally; not uploaded")
+            return
+        try:
+            ref = self.client.put_blob(png, shot["mime"])
+        except ControlPlaneError as exc:
+            report.notes.append(f"screenshot upload failed: {exc}")
+            return
+        report.assets.append(ref["sha256"])
+        if not self.annotate:
+            return
+        try:
+            result = self.segment(png)
+        except Exception as exc:
+            report.notes.append(f"SAM 3.1 segmentation failed: {type(exc).__name__}: {exc}"[:200])
+            return
+        report.annotations.append(
+            {
+                "span_id": report.facts.screenshot["id"],
+                "sha256": ref["sha256"],
+                "model": result["model"],
+                "prompt": result["prompt"],
+                "boxes": result["boxes"],
+            }
         )
 
     def _file(self, report: IncidentReport, incident: dict) -> None:

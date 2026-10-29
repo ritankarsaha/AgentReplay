@@ -19,9 +19,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class LocalIngest:
-    def __init__(self, api_key: str, project_id: str, env: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self, api_key: str, project_id: str, env: Optional[Dict[str, str]] = None, owner_email: Optional[str] = None
+    ) -> None:
         self.api_key = api_key
         self.project_id = project_id
+        self.owner_email = owner_email
         self._extra_env = env or {}
         self._dir = Path(tempfile.mkdtemp(prefix="local_ingest_"))
         self._db = self._dir / "ingest.db"
@@ -57,8 +60,8 @@ class LocalIngest:
             raise RuntimeError("local ingest did not start")
         con = sqlite3.connect(self._db)
         con.execute(
-            "INSERT INTO projects (id, name, api_key_hash) VALUES (?, ?, ?)",
-            (self.project_id, "local-check", hashlib.sha256(self.api_key.encode()).hexdigest()),
+            "INSERT INTO projects (id, name, api_key_hash, owner_email) VALUES (?, ?, ?, ?)",
+            (self.project_id, "local-check", hashlib.sha256(self.api_key.encode()).hexdigest(), self.owner_email),
         )
         con.commit()
         con.close()

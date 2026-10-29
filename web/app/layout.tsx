@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 
+import { OpenIncidentsBanner } from "@/components/open-incidents-banner";
 import { SiteHeader } from "@/components/site-header";
 
 import "./globals.css";
@@ -43,6 +44,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <SiteHeader />
+        <OpenIncidentsBanner />
         {children}
       </body>
     </html>

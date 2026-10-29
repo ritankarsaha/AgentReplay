@@ -10,17 +10,19 @@ export const SPAN_TYPE_COLORS: Record<SpanType, string> = {
   llm: "var(--span-llm)",
   tool: "var(--span-tool)",
   checkpoint: "var(--span-checkpoint)",
-};
-
-export const SPAN_TYPE_LABELS: Record<SpanType, string> = {
-  node: "node",
-  llm: "llm",
-  tool: "tool",
-  checkpoint: "checkpoint",
+  policy: "var(--span-policy)",
+  scope_violation: "var(--status-failure)",
+  alert: "var(--status-failure)",
+  message: "var(--span-message)",
+  data_read: "var(--span-data)",
+  decision: "var(--span-llm)",
+  negotiation: "var(--span-negotiation)",
+  screenshot: "var(--span-node)",
 };
 
 export const STATUS_COLORS: Record<RunStatus, string> = {
   ok: "var(--status-ok)",
   failure: "var(--status-failure)",
   divergence: "var(--status-divergence)",
+  halted: "var(--status-failure)",
 };

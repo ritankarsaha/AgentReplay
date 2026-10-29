@@ -138,6 +138,18 @@ class ControlPlaneClient:
         data = self._request("GET", f"/v1/agents/{agent_id}/manifests/{version}", ok_404=True)
         return data["manifest"] if data else None
 
+    def put_blob(self, payload: bytes, mime: str) -> dict:
+        try:
+            response = self._http.post("/v1/blobs", content=payload, headers={"Content-Type": mime})
+        except httpx.RequestError as exc:
+            raise ControlPlaneError(f"POST /v1/blobs: {exc}") from exc
+        if response.status_code >= 400:
+            raise ControlPlaneError(f"POST /v1/blobs: {response.status_code} {response.text[:200]}")
+        return response.json()
+
+    def share_incident(self, incident_id: str) -> Optional[str]:
+        return self._request("POST", f"/v1/incidents/{incident_id}/share")["share_token"]
+
     def capture_case(self, body: dict) -> dict:
         return self._request("POST", "/v1/regression-cases/capture-production", json=body)
 

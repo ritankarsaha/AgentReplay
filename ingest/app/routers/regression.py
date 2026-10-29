@@ -116,12 +116,15 @@ async def capture_production_case(
 @router.get("/v1/regression-cases", response_model=RegressionCaseListOut)
 async def list_cases(
     status_filter: Optional[str] = Query(default=None, alias="status"),
+    incident_id: Optional[str] = None,
     project: Project = Depends(get_current_project),
     db: AsyncSession = Depends(get_db),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> RegressionCaseListOut:
-    """List regression cases, optionally filtered by `status`."""
-    cases = await crud.list_regression_cases(db, project_id=project.id, status=status_filter, limit=limit)
+    """List regression cases, optionally filtered by `status` and `incident_id`."""
+    cases = await crud.list_regression_cases(
+        db, project_id=project.id, status=status_filter, incident_id=incident_id, limit=limit
+    )
     return RegressionCaseListOut(cases=[regression_case_to_out(c) for c in cases])
 
 

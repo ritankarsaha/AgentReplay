@@ -129,16 +129,19 @@ class AirlineSite:
             ("Fare paid", f"₹{booking['price_inr']:,.0f}"),
             ("Passenger", booking["passenger"]),
         ]
-        cells = "".join(
-            f"<tr><th>{html.escape(k)}</th><td id=\"{html.escape(k.lower().replace(' ', '-'))}\">{html.escape(v)}</td></tr>"
-            for k, v in rows
-        )
+        def cell(key: str, value: str) -> str:
+            text = html.escape(value)
+            shown = f"<span class=\"pill\">{text}</span>" if key == "Departure" else text
+            return f"<tr><th>{html.escape(key)}</th><td id=\"{html.escape(key.lower().replace(' ', '-'))}\">{shown}</td></tr>"
+
+        cells = "".join(cell(k, v) for k, v in rows)
         return (
             "<!doctype html><html><head><meta charset=\"utf-8\"><title>Booking confirmed</title><style>"
             "body{font-family:Helvetica,Arial,sans-serif;background:#f4f6f8;margin:0;padding:32px}"
             ".card{max-width:560px;background:#fff;border:1px solid #d7dde3;border-radius:8px;padding:24px}"
             "h1{font-size:22px;margin:0 0 4px}.sim{color:#8a5a00;font-size:12px;margin-bottom:16px}"
-            "th{text-align:left;color:#5a6670;padding:8px 24px 8px 0;font-weight:600}td{padding:8px 0;font-size:18px}"
+            "th{text-align:left;color:#5a6670;padding:10px 24px 10px 0;font-weight:600}td{padding:10px 0;font-size:18px}"
+            ".pill{display:inline-block;background:#1f6feb;color:#fff;border-radius:999px;padding:6px 18px;font-weight:600}"
             "</style></head><body><div class=\"card\"><h1>Booking confirmed</h1>"
             "<div class=\"sim\">Simulated airline sandbox. No real booking or payment.</div>"
             f"<table>{cells}</table></div></body></html>"

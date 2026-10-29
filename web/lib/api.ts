@@ -4,8 +4,20 @@
  * import this from a `"use client"` component.
  */
 
-export type RunStatus = "ok" | "failure" | "divergence";
-export type SpanType = "llm" | "tool" | "node" | "checkpoint";
+export type RunStatus = "ok" | "failure" | "divergence" | "halted";
+export type SpanType =
+  | "llm"
+  | "tool"
+  | "node"
+  | "checkpoint"
+  | "policy"
+  | "scope_violation"
+  | "alert"
+  | "message"
+  | "data_read"
+  | "decision"
+  | "negotiation"
+  | "screenshot";
 
 // Chunk 3.6 (Sonnet/MAST classifier). "none" = not classified yet (either
 // not a failure, or a failure not yet picked up by a Celery worker) —
@@ -143,7 +155,7 @@ function scopeHeaders(scope: ViewerScope): Record<string, string> {
   return headers;
 }
 
-async function ingestFetch<T>(path: string, scope: ViewerScope): Promise<T> {
+export async function ingestFetch<T>(path: string, scope: ViewerScope): Promise<T> {
   const { baseUrl } = getConfig();
 
   const res = await fetch(`${baseUrl}${path}`, {
@@ -165,6 +177,29 @@ async function ingestFetch<T>(path: string, scope: ViewerScope): Promise<T> {
 
 export class NotFoundError extends Error {}
 
+export async function ingestFetchBinary(
+  path: string,
+  scope: ViewerScope | null
+): Promise<{ body: ArrayBuffer; contentType: string } | null> {
+  const { baseUrl, serviceToken } = getConfig();
+  const headers = scope ? scopeHeaders(scope) : { Authorization: `Bearer ${serviceToken}` };
+  const res = await fetch(`${baseUrl}${path}`, { headers, cache: "no-store" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`ingest ${path} -> ${res.status}`);
+  return { body: await res.arrayBuffer(), contentType: res.headers.get("content-type") ?? "application/octet-stream" };
+}
+
+export async function ingestFetchPublic<T>(path: string): Promise<T> {
+  const { baseUrl, serviceToken } = getConfig();
+  const res = await fetch(`${baseUrl}${path}`, {
+    headers: { Authorization: `Bearer ${serviceToken}`, Accept: "application/json" },
+    cache: "no-store",
+  });
+  if (res.status === 404) throw new NotFoundError(path);
+  if (!res.ok) throw new Error(`ingest ${path} -> ${res.status}`);
+  return (await res.json()) as T;
+}
+
 export class IngestApiError extends Error {
   constructor(
     public readonly status: number,
@@ -174,10 +209,11 @@ export class IngestApiError extends Error {
   }
 }
 
-async function ingestWrite<T>(
+export async function ingestWrite<T>(
   path: string,
   scope: ViewerScope | null,
-  body?: unknown
+  body?: unknown,
+  method: "POST" | "DELETE" = "POST"
 ): Promise<T> {
   const { baseUrl, serviceToken } = getConfig();
   const headers = scope
@@ -185,7 +221,7 @@ async function ingestWrite<T>(
     : { Authorization: `Bearer ${serviceToken}`, Accept: "application/json" };
 
   const res = await fetch(`${baseUrl}${path}`, {
-    method: "POST",
+    method,
     headers: { ...headers, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",

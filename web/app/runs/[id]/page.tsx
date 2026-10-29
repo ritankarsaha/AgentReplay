@@ -4,10 +4,12 @@ import { notFound } from "next/navigation";
 
 import { DiagnosisCard } from "@/components/diagnosis-card";
 import { GenerateTestCard } from "@/components/generate-test-card";
+import { HaltedBanner } from "@/components/halted-banner";
 import { RunHeader } from "@/components/run-header";
 import { RunStats } from "@/components/run-stats";
 import { SpanTimeline } from "@/components/span-timeline";
 import { getRun } from "@/lib/api";
+import { getIncidents } from "@/lib/control-plane";
 import { requireProjectScope } from "@/lib/viewer";
 import { buildSpanTree } from "@/lib/span-tree";
 
@@ -22,6 +24,8 @@ export default async function RunDetailPage({
 
   if (!run) notFound();
 
+  const incident =
+    run.status === "halted" ? ((await getIncidents(scope, { runId: run.id, limit: 1 }))[0] ?? null) : null;
   const tree = buildSpanTree(run.spans);
   const culpritSpanId = run.diagnosis?.culprit_span_id ?? run.root_span_id;
 
@@ -37,6 +41,7 @@ export default async function RunDetailPage({
         </Link>
       </div>
       <RunHeader run={run} />
+      {run.status === "halted" && <HaltedBanner spans={run.spans} incident={incident} />}
       {run.status === "failure" && <DiagnosisCard run={run} />}
       {run.status === "failure" && <GenerateTestCard runId={run.id} />}
       <RunStats spans={run.spans} />
