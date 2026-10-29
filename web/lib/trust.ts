@@ -22,3 +22,11 @@ export const COMPONENT_WEIGHTS = [
 export function formatInr(value: number | null | undefined): string {
   return value == null ? "—" : `₹${Number(value).toLocaleString("en-IN")}`;
 }
+
+/** Human wording for what caused a trust recompute (`trigger_run_id` as stored by the control plane). */
+export function describeTrigger(trigger: string | null): string {
+  if (!trigger) return "recomputed";
+  if (trigger.startsWith("seed:")) return "starting history";
+  if (trigger.startsWith("regression:")) return "regression test result";
+  return "incident: run halted";
+}

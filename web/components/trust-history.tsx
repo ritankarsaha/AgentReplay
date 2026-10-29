@@ -1,4 +1,4 @@
-import { TRUST_MAX, TRUST_MIN, bandColor } from "@/lib/trust";
+import { TRUST_MAX, TRUST_MIN, bandColor, describeTrigger } from "@/lib/trust";
 import type { TrustOut } from "@/lib/control-plane";
 import { formatAbsolute } from "@/lib/format";
 import { SimulatedBadge } from "@/components/simulated-badge";
@@ -40,7 +40,7 @@ export function TrustHistory({ history }: { history: TrustOut[] }) {
           <li key={i} className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-foreground">{p.score}</span>
             <span className="capitalize" style={{ color: bandColor(p.band) }}>{p.band}</span>
-            <span>{p.trigger_run_id ?? "recomputed"}</span>
+            <span>{describeTrigger(p.trigger_run_id)}</span>
             {p.components.seeded && <SimulatedBadge label="seeded" />}
             {p.computed_at && <span>{formatAbsolute(p.computed_at)}</span>}
           </li>

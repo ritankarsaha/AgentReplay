@@ -9,7 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from controlplane import meta
+from controlplane import cassette, meta
+from controlplane.ledger import LEDGER
+from controlplane.pricing import cost_usd
 from controlplane.learn.causation import TraceFacts
 from controlplane.transact.choosers import (
     CHOOSER_MAX_TOKENS,
@@ -23,7 +25,6 @@ from controlplane.transact.choosers import (
 TASK_CLASS = "flight_selection"
 ATTEMPTS = 2
 REQUEST_TIMEOUT_S = 180.0
-PRICES_PER_M_USD: Dict[str, Tuple[float, float]] = {"muse-spark": (1.25, 4.25)}
 
 REPEATS = "repeats_mistake"
 CORRECT = "correct"
@@ -54,15 +55,6 @@ def task_from_facts(facts: TraceFacts) -> ChoiceTask:
     return ChoiceTask(facts.intent, facts.search["output"]["results"], facts.reference_doc)
 
 
-def cost_usd(model: str, usage: Optional[dict]) -> Optional[float]:
-    prices = next((p for prefix, p in PRICES_PER_M_USD.items() if model.startswith(prefix)), None)
-    if prices is None or not usage:
-        return None
-    return round(
-        (usage.get("prompt_tokens") or 0) * prices[0] / 1e6 + (usage.get("completion_tokens") or 0) * prices[1] / 1e6, 6
-    )
-
-
 AskFn = Callable[[ModelSpec, Dict[str, str]], Tuple[str, Optional[dict]]]
 
 
@@ -78,13 +70,14 @@ def ask_model(spec: ModelSpec, prompt: Dict[str, str]) -> Tuple[str, Optional[di
         max_tokens=CHOOSER_MAX_TOKENS,
         messages=[{"role": "system", "content": prompt["system"]}, {"role": "user", "content": prompt["user"]}],
     )
-    usage = response.usage
-    return (
-        response.choices[0].message.content or "",
-        {"prompt_tokens": getattr(usage, "prompt_tokens", 0), "completion_tokens": getattr(usage, "completion_tokens", 0)}
-        if usage
-        else None,
+    raw = response.usage
+    usage = (
+        {"prompt_tokens": getattr(raw, "prompt_tokens", 0), "completion_tokens": getattr(raw, "completion_tokens", 0)}
+        if raw
+        else None
     )
+    LEDGER.record(spec.name, usage)
+    return response.choices[0].message.content or "", usage
 
 
 def _one_trial(spec: ModelSpec, task: ChoiceTask, prompt: Dict[str, str], trial: int, ask: AskFn) -> Dict[str, Any]:
@@ -92,7 +85,12 @@ def _one_trial(spec: ModelSpec, task: ChoiceTask, prompt: Dict[str, str], trial:
     spent: Optional[float] = None
     for attempt in range(1, ATTEMPTS + 1):
         try:
-            text, usage = ask(spec, prompt)
+            text, usage = cassette.run(
+                f"score.{spec.name}.{trial}.{attempt}",
+                {"model": spec.name, "prompt": prompt},
+                lambda: ask(spec, prompt),
+                valid=lambda reply: bool(reply[0]),
+            )
         except Exception as exc:
             return {**base, "verdict": ERROR, "error": f"{type(exc).__name__}: {exc}"[:300], "cost_usd": spent}
         call_cost = cost_usd(spec.name, usage)

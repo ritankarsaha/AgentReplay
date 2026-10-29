@@ -113,3 +113,39 @@ def test_a_correct_purchase_files_a_dispute_but_registers_no_case(travelbot_trac
     client = FakeClient({"spans": spans, "agent_id": "agt_1"}, classify=CLASSIFIED)
     report = IncidentPipeline(client).process("inc-1")
     assert report.causation == [] and client.cases == []
+
+
+class FlakyClassifier(FakeClient):
+    def __init__(self, trace, replies, **kwargs):
+        super().__init__(trace, **kwargs)
+        self.replies, self.calls = list(replies), 0
+
+    def classify_incident(self, incident_id):
+        self.calls += 1
+        return self.replies.pop(0)
+
+
+ERROR_REPLY = {"classification_status": "error", "failure_class": None, "culprit_span_id": None, "diagnosis": {"error": "empty reply"}}
+
+
+def test_classification_is_retried_once_after_a_classifier_error(travelbot_trace):
+    client = FlakyClassifier(travelbot_trace, [ERROR_REPLY, CLASSIFIED])
+    report = IncidentPipeline(client).process("inc-1")
+    assert client.calls == 2 and report.classification["failure_class"] == "disobey_task_specification"
+    assert not any("classification" in n for n in report.notes)
+
+
+def test_two_classifier_errors_are_reported_and_the_rest_of_the_pipeline_still_runs(travelbot_trace):
+    client = FlakyClassifier(travelbot_trace, [ERROR_REPLY, ERROR_REPLY], trust={"band": "standard", "score": 640})
+    report = IncidentPipeline(client).process("inc-1")
+    assert client.calls == 2 and report.classification is None and "empty reply" in report.notes[0]
+    assert set(client.filings) == {"dispute", "claim"}
+
+
+def test_an_unexpected_exception_in_the_classify_beat_does_not_crash_the_pipeline(travelbot_trace):
+    class Broken(FakeClient):
+        def classify_incident(self, incident_id):
+            raise KeyError("surprise")
+
+    report = IncidentPipeline(Broken(travelbot_trace)).process("inc-1")
+    assert report.classification is None and "KeyError" in report.notes[0] and report.dispute is not None

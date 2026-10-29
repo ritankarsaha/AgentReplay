@@ -109,3 +109,22 @@ def test_dispute_requires_a_purchase_and_a_request():
         filings.build_dispute(
             incident_id="i", run_id="r", agent_id=None, spans=[], facts=TraceFacts(), causation=[], manifest=None, replay_url="x"
         )
+
+
+@pytest.mark.parametrize(
+    "text,accepted",
+    [
+        ("The agent paid ₹5,200 under {ref}.", True),
+        ("The agent paid ₹5200 under {ref}.", True),
+        ("The agent paid INR 5200.00 under {ref}.", True),
+        ("The agent paid ₹52,000 under {ref}.", False),
+        ("The agent paid ₹520 under {ref}.", False),
+        ("The agent paid ₹5,200 for the flight.", False),
+    ],
+)
+def test_model_narrative_amount_check_ignores_formatting_but_not_the_value(travelbot_trace, text, accepted):
+    template = dispute_for(travelbot_trace)["narrative"]
+    ref = dispute_for(travelbot_trace)["transaction"]["booking_ref"]
+    written = text.format(ref=ref)
+    narrative = dispute_for(travelbot_trace, narrator=lambda facts: written)["narrative"]
+    assert (narrative == written) is accepted and (accepted or narrative == template)

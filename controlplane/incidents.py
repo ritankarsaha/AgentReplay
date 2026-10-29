@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from controlplane import cassette, ledger
 from controlplane.blobs import BlobStore
 from controlplane.client import ControlPlaneClient, ControlPlaneError
 from controlplane.learn.causation import TraceFacts, extract_facts, tag_causation
@@ -14,6 +15,8 @@ from controlplane.learn import vision
 from controlplane.learn.incident_case import register_case
 from controlplane.learn.walkthrough import Captioner, build_walkthrough
 from controlplane.transact.filings import Narrator, Redactor, build_claim, build_dispute, default_redact
+
+CLASSIFY_ATTEMPTS = 2
 
 
 @dataclass
@@ -79,7 +82,12 @@ class IncidentPipeline:
 
         if self.classify:
             try:
-                classified = self.client.classify_incident(incident_id)
+                classified = cassette.run(
+                    "classify",
+                    {"kind": "classify"},
+                    lambda: self._classify_live(incident_id),
+                    valid=lambda reply: reply.get("classification_status") == "done",
+                )
                 if classified["classification_status"] != "done":
                     error = (classified.get("diagnosis") or {}).get("error")
                     raise ControlPlaneError(f"classifier returned {classified['classification_status']}: {error}")
@@ -91,8 +99,8 @@ class IncidentPipeline:
                     "backend": (classified.get("diagnosis") or {}).get("backend"),
                     "usage": (classified.get("diagnosis") or {}).get("usage"),
                 }
-            except ControlPlaneError as exc:
-                report.notes.append(f"classification unavailable: {exc}")
+            except Exception as exc:
+                report.notes.append(f"classification unavailable: {type(exc).__name__}: {exc}")
 
         try:
             report.facts = extract_facts(spans)
@@ -126,6 +134,18 @@ class IncidentPipeline:
         else:
             report.notes.append("no purchase in the trace; filings skipped")
         return report
+
+    def _classify_live(self, incident_id: str) -> dict:
+        """Classify, retrying once after a classifier error (ingest re-runs anything not `done`)."""
+        classified: dict = {}
+        for _ in range(CLASSIFY_ATTEMPTS):
+            classified = self.client.classify_incident(incident_id)
+            usage = (classified.get("diagnosis") or {}).get("usage")
+            if usage:
+                ledger.LEDGER.record("muse-spark-classifier", usage, cost=usage.get("cost_usd"))
+            if classified.get("classification_status") == "done":
+                break
+        return classified
 
     def _store_details(self, report: IncidentReport) -> None:
         self.client.merge_incident_details(

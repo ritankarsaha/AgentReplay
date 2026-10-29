@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Callable, List, Optional, Protocol
 
 from agentreplay.guard import emit_span
+from controlplane import cassette
 from world.seller import LEVERS, MAX_ROUNDS
 
 PRIORITY = ["flex_window", "non_refundable", "fee_waiver", "no_checked_bag", "partner_wallet"]
@@ -70,8 +71,13 @@ class MetaBuyer:
             "and do not state a target above it. Offer only concessions the customer would accept.\n"
             'Reply with only JSON: {"levers": [names], "target_price_inr": int, "rationale": str}.'
         )
-        text = chat(
-            prompt, system="You are a careful negotiating agent. Output JSON only.", max_tokens=BUYER_MAX_TOKENS
+        text = cassette.run(
+            f"buyer.round{ctx['round']}",
+            {"prompt": prompt},
+            lambda: chat(
+                prompt, system="You are a careful negotiating agent. Output JSON only.", max_tokens=BUYER_MAX_TOKENS
+            ),
+            valid=bool,
         )
         match = _JSON_OBJECT.search(text or "")
         if not match:

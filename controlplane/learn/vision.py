@@ -8,13 +8,15 @@ Only boxes are used; the encoded masks in the reply are ignored.
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import re
 from typing import Any, Dict, List, Optional
 
 import httpx
 
-from controlplane import meta
+from controlplane import cassette, meta
+from controlplane.ledger import LEDGER
 
 SAM_MODEL = meta.SAM_MODEL
 DEPARTURE_PROMPT = "blue rounded rectangle"
@@ -40,6 +42,13 @@ def segment(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     http: Optional[httpx.Client] = None,
+) -> Dict[str, Any]:
+    request = {"png_sha256": hashlib.sha256(png).hexdigest(), "prompt": prompt}
+    return cassette.run("sam", request, lambda: _segment(png, prompt, api_key, base_url, http))
+
+
+def _segment(
+    png: bytes, prompt: str, api_key: Optional[str], base_url: Optional[str], http: Optional[httpx.Client]
 ) -> Dict[str, Any]:
     key = api_key or os.environ.get("META_API_KEY")
     if not key:
@@ -70,4 +79,5 @@ def segment(
         for part in item.get("content", [])
         if part.get("type") == "output_text"
     )
+    LEDGER.record(SAM_MODEL, None, cost=None)
     return {"model": SAM_MODEL, "prompt": prompt, "boxes": parse_boxes(text)}

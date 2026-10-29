@@ -6,9 +6,9 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Dict, Optional
 
-from controlplane import meta
+from controlplane import cassette, meta
 
-NARRATION_MAX_TOKENS = 4096
+NARRATION_MAX_TOKENS = 8192
 
 
 def meta_narrator(chat: Optional[Callable[..., str]] = None) -> Callable[[Dict[str, Any]], str]:
@@ -23,8 +23,13 @@ def meta_narrator(chat: Optional[Callable[..., str]] = None) -> Callable[[Dict[s
             "Use only the facts below, state the exact amount in INR and the booking reference, and invent "
             "nothing.\n\n" + json.dumps(brief, ensure_ascii=False, indent=2)
         )
-        return (chat or meta.chat)(
-            prompt, system="You write precise, neutral incident narratives.", max_tokens=NARRATION_MAX_TOKENS
-        ).strip()
+        return cassette.run(
+            "narrate",
+            {"prompt": prompt},
+            lambda: (chat or meta.chat)(
+                prompt, system="You write precise, neutral incident narratives.", max_tokens=NARRATION_MAX_TOKENS
+            ).strip(),
+            valid=bool,
+        )
 
     return narrate

@@ -105,9 +105,10 @@ def _narrate(facts: Dict[str, Any], narrator: Optional[Narrator]) -> str:
         text = narrator(facts)
     except Exception:
         return fallback
-    amount = f"{facts['transaction']['amount_inr']:,.0f}"
-    required = (amount, str(facts["transaction"]["booking_ref"]))
-    return text if text and all(item in text.replace("₹", "") for item in required) else fallback
+    amount = str(int(facts["transaction"]["amount_inr"]))
+    plain = text.replace(",", "")
+    states_amount = re.search(rf"(?<!\d){amount}(?!\d)", plain) is not None
+    return text if text and states_amount and str(facts["transaction"]["booking_ref"]) in text else fallback
 
 
 def build_dispute(

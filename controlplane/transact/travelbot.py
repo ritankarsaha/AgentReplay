@@ -15,6 +15,8 @@ The chooser is scripted by default; `LLMChooser` lets a model make the pick.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -22,6 +24,7 @@ from typing import Dict, List, Optional
 
 import agentreplay
 from agentreplay.guard import emit_span
+from controlplane import cassette
 from controlplane.blobs import BlobStore
 from controlplane.govern import KeyPair, ScopeManifest, ToolBinding, sign_manifest
 from controlplane.transact.choosers import ChoiceTask, Chooser, Intent, ScriptedChooser, part_of_day
@@ -211,11 +214,21 @@ class TravelBot:
     def _capture(self, booking: dict) -> dict:
         page = AirlineSite.confirmation_html(booking)
         html_ref = self.blobs.put(page.encode("utf-8"), "text/html")
-        png = capture_png(page)
+        png = self._screenshot(page)
         image_ref = self.blobs.put(png, "image/png") if png else None
         record = {"page": "booking_confirmation", "pnr": booking["pnr"], "html": html_ref, "image": image_ref}
         emit_span("screenshot", "booking_confirmation", {"pnr": booking["pnr"]}, {**record, "captured": image_ref is not None})
         return record
+
+    @staticmethod
+    def _screenshot(page: str) -> Optional[bytes]:
+        encoded = cassette.run(
+            "capture",
+            {"html_sha256": hashlib.sha256(page.encode()).hexdigest()},
+            lambda: (lambda png: base64.b64encode(png).decode() if png else None)(capture_png(page)),
+            valid=lambda value: value is not None,
+        )
+        return base64.b64decode(encoded) if encoded else None
 
     def _attempt_fix(self, intent: Intent, results: List[dict]) -> None:
         for result in sorted(results, key=lambda r: r["rank"]):

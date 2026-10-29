@@ -8,10 +8,12 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
+from controlplane import cassette
+
 _DOC_TIME = re.compile(r"(\b[A-Z0-9]{2}-\d{2,4}) departs (\d{2}:\d{2})")
 _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 _DAYPARTS = {"morning": (5, 12), "afternoon": (12, 17), "evening": (17, 22)}
-CHOOSER_MAX_TOKENS = 4096
+CHOOSER_MAX_TOKENS = 8192
 
 
 def daypart_window(name: str) -> Tuple[str, str]:
@@ -144,7 +146,12 @@ class LLMChooser:
 
         prompt = build_choice_prompt(task)
         chat = self._chat or meta.chat
-        text = chat(prompt["user"], system=prompt["system"], max_tokens=CHOOSER_MAX_TOKENS)
+        text = cassette.run(
+            "chooser",
+            prompt,
+            lambda: chat(prompt["user"], system=prompt["system"], max_tokens=CHOOSER_MAX_TOKENS),
+            valid=bool,
+        )
         picked = parse_choice(text, task.results)
         rows = [_row(r, r["depart_at"][-5:], True) for r in task.results]
         if picked is None:

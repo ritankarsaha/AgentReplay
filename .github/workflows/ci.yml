@@ -67,6 +67,23 @@ jobs:
       - run: pytest tests -q
         working-directory: ingest
 
+  demo:
+    name: Demo, cold start from the recording
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            ingest/pyproject.toml
+      # Replay mode makes no network calls and needs no secrets or browser.
+      - run: pip install -e ".[dev]" "./ingest[dev]"
+      - run: python -m controlplane.scripts.rehearse --mode replay --runs 2 --quiet
+
   web:
     name: Web viewer
     runs-on: ubuntu-latest
@@ -91,7 +108,7 @@ jobs:
   ci-ok:
     name: CI passed
     if: always()
-    needs: [sdk, package, ingest, web]
+    needs: [sdk, package, ingest, demo, web]
     runs-on: ubuntu-latest
     steps:
       - run: |

@@ -11,11 +11,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from controlplane import meta
+from controlplane import cassette, meta
 from controlplane.learn.causation import TraceFacts, ordered
 
 Captioner = Callable[[List[Dict[str, Any]]], List[str]]
-CAPTION_MAX_TOKENS = 4096
+CAPTION_MAX_TOKENS = 8192
 _NUMBER = re.compile(r"\d[\d,.:]*\d|\d")
 
 
@@ -131,8 +131,13 @@ def meta_captioner(chat: Optional[Callable[..., str]] = None) -> Captioner:
             'Reply with only JSON: {"captions": ["...", ...]} with exactly one caption per step, in order.\n\n'
             + json.dumps(brief, ensure_ascii=False, indent=2)
         )
-        text = (chat or meta.chat)(
-            prompt, system="You narrate incidents for a non-technical viewer.", max_tokens=CAPTION_MAX_TOKENS
+        text = cassette.run(
+            "captions",
+            {"prompt": prompt},
+            lambda: (chat or meta.chat)(
+                prompt, system="You narrate incidents for a non-technical viewer.", max_tokens=CAPTION_MAX_TOKENS
+            ),
+            valid=bool,
         )
         match = re.search(r"\{.*\}", text or "", re.DOTALL)
         if not match:
