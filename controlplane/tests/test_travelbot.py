@@ -8,7 +8,8 @@ from agentreplay.replay import replay_mode
 from controlplane.blobs import BlobStore
 from controlplane.govern import Monitor, ScopeGuard, generate_keypair
 from controlplane.transact import travelbot as tb
-from controlplane.transact.travelbot import TravelBot, parse_sms, part_of_day, travelbot_manifest
+from controlplane.transact.choosers import part_of_day
+from controlplane.transact.travelbot import TravelBot, parse_sms, travelbot_manifest
 
 SMS = "Book BLR→CCU Friday morning, under ₹6000."
 PNG = b"\x89PNG\r\n\x1a\nfake"

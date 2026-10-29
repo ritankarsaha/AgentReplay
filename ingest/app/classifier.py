@@ -31,6 +31,7 @@ from .mast import MAST_CATEGORY_KEYS, render_taxonomy_for_prompt
 from .models import Run, SpanModel
 
 CLASSIFY_TOOL_NAME = "classify_failure"
+CLASSIFIABLE_STATUSES = ("failure", "halted")
 
 # Per-field/per-trace caps so a large run doesn't blow the model's context
 # (or the API bill) — generous enough for a real demo-sized trace, not
@@ -274,7 +275,7 @@ async def classify_run_async(
 ) -> None:
     """Classify one run and persist the result. Idempotent and safe to call repeatedly.
 
-    No-ops if the run doesn't exist, isn't (or is no longer) `status="failure"`,
+    No-ops if the run doesn't exist, isn't `failure`/`halted`,
     or has already been classified (`classification_status == "done"`) — so a
     race between two ingest batches both enqueueing the same `run_id` costs at
     most one duplicate (wasted, not incorrect) classification call.
@@ -284,7 +285,7 @@ async def classify_run_async(
     defaults to the real `classify_trace()` dispatcher.
     """
     run = await crud.get_run_with_spans_by_id(session, run_id=run_id)
-    if run is None or run.status != "failure" or run.classification_status == "done":
+    if run is None or run.status not in CLASSIFIABLE_STATUSES or run.classification_status == "done":
         return
 
     trace_summary = build_trace_summary(run, run.spans)

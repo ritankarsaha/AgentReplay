@@ -316,3 +316,45 @@ def test_judge_with_meta_errors_on_unusable_reply(monkeypatch):
     _fake_meta_openai(monkeypatch, SimpleNamespace(content=None, tool_calls=None), {})
     with pytest.raises(SemanticJudgeNotConfigured, match="neither"):
         assertions_module._judge_with_meta({"x": 1}, "r", model="m")
+
+
+def test_output_checks_time_window_and_missing_values():
+    from agentreplay.testgen.assertions import assert_output_checks
+
+    window = {"path": "booking.depart_at", "op": "time_in_window", "start": "05:00", "end": "12:00"}
+    assert_output_checks({"booking": {"depart_at": "2026-11-06T08:10"}}, [window])
+    with pytest.raises(AssertionError, match="expected a time in"):
+        assert_output_checks({"booking": {"depart_at": "2026-11-06T19:30"}}, [window])
+    with pytest.raises(AssertionError, match="missing"):
+        assert_output_checks({"booking": None}, [window])
+    assert_output_checks({"booking": None}, [{**window, "allow_missing": True}])
+    assert_output_checks({}, [{**window, "allow_missing": True}])
+
+
+def test_output_checks_lte_eq_unknown_and_attribute_access():
+    from types import SimpleNamespace
+
+    from agentreplay.testgen.assertions import assert_output_checks
+
+    result = SimpleNamespace(price=5200, state="ok")
+    assert_output_checks(result, [{"path": "price", "op": "lte", "value": 6000}, {"path": "state", "op": "eq", "value": "ok"}])
+    with pytest.raises(AssertionError, match="got 5200"):
+        assert_output_checks(result, [{"path": "price", "op": "lte", "value": 5000}])
+    with pytest.raises(AssertionError, match="unknown output check op"):
+        assert_output_checks(result, [{"path": "price", "op": "between"}])
+    assert_output_checks(result, None)
+
+
+def test_run_assertion_spec_applies_output_checks_and_template_renders_them():
+    from agentreplay.replay.store import RecordedRun
+    from agentreplay.testgen.assertions import run_assertion_spec
+    from agentreplay.testgen.test_template import render_test_module
+
+    spec = {"no_exception": True, "output_checks": [{"path": "n", "op": "lte", "value": 1}]}
+    run = RecordedRun([], span_type="tool")
+    run_assertion_spec(spec, tool_run=run, result={"n": 1}, exception=None)
+    with pytest.raises(AssertionError):
+        run_assertion_spec(spec, tool_run=run, result={"n": 2}, exception=None)
+    source = render_test_module(fixture_module="fx", entrypoint="a:b", run_id="r1", assertion_spec=spec)
+    assert "OUTPUT_CHECKS = [{'path': 'n', 'op': 'lte', 'value': 1}]" in source
+    compile(source, "t.py", "exec")

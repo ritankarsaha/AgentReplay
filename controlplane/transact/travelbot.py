@@ -1,16 +1,21 @@
 """TravelBot: SMS in, search, negotiate, book. Reproduces the demo's wrong purchase on purpose.
 
-The agent is scripted. Muse Spark is used only as the negotiating buyer. Three flaws combine
-into the failure the incident pipeline later explains:
+Version "v1" (default) is the broken agent. Three flaws combine into the failure the incident
+pipeline later explains:
 
 - sponsored influence: the sponsored listing is ranked first and gets considered first,
 - stale data: the cached fare-rules doc (schedule v5) says 6E-871 departs 07:30, and the
   agent believes it over the live listing (19:30),
-- intent drift: it concedes a Friday 06:00-22:00 flex window, looser than "morning".
+- intent drift: the scripted buyer concedes a Friday 06:00-22:00 flex window, looser than "morning".
+
+Version "v2" is the fix: the live listing wins over a stale doc, results are ordered by price
+instead of ad rank, and when nothing satisfies the request the agent declines instead of buying.
+The chooser is scripted by default; `LLMChooser` lets a model make the pick.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -19,6 +24,7 @@ import agentreplay
 from agentreplay.guard import emit_span
 from controlplane.blobs import BlobStore
 from controlplane.govern import KeyPair, ScopeManifest, ToolBinding, sign_manifest
+from controlplane.transact.choosers import ChoiceTask, Chooser, Intent, ScriptedChooser, part_of_day
 from controlplane.transact.negotiator import Buyer, ScriptedBuyer, run_negotiation
 from controlplane.world.capture import capture_png
 from controlplane.world.sms import SmsGateway
@@ -35,13 +41,11 @@ ARG_NAMES: Dict[str, List[str]] = {
 }
 DEFAULT_CONSTRAINTS = {"max_spend_inr": 6000, "max_bookings_per_task": 1, "geography": "domestic"}
 
-_DAYPARTS = {"morning": (5, 12), "afternoon": (12, 17), "evening": (17, 22)}
 _SMS = re.compile(
     r"book\s+(?P<origin>[A-Za-z]{3})\s*(?:→|->|to)\s*(?P<dest>[A-Za-z]{3})\s+(?P<day>\w+day)"
     r"(?:\s+(?P<part>morning|afternoon|evening))?.*?(?:under|below|<)\s*₹?\s*(?P<budget>[\d,]+)",
     re.IGNORECASE | re.DOTALL,
 )
-_DOC_TIME = re.compile(r"(\b[A-Z0-9]{2}-\d{2,4}) departs (\d{2}:\d{2})")
 
 
 def travelbot_manifest(keypair: KeyPair, **overrides) -> ScopeManifest:
@@ -50,16 +54,6 @@ def travelbot_manifest(keypair: KeyPair, **overrides) -> ScopeManifest:
         allowed_tools=ALLOWED_TOOLS,
         constraints={**DEFAULT_CONSTRAINTS, **overrides},
     )
-
-
-@dataclass
-class Intent:
-    origin: str
-    destination: str
-    weekday: str
-    part_of_day: Optional[str]
-    budget_inr: int
-    text: str
 
 
 def parse_sms(body: str) -> Intent:
@@ -79,22 +73,32 @@ def parse_sms(body: str) -> Intent:
     )
 
 
-def part_of_day(depart: str) -> str:
-    hour = int(depart[-5:-3])
-    for name, (start, end) in _DAYPARTS.items():
-        if start <= hour < end:
-            return name
-    return "night"
-
-
 @dataclass
 class TravelBotResult:
     intent: Intent
-    flight: str
-    booking: dict
-    price_inr: int
+    flight: Optional[str]
+    booking: Optional[dict]
+    price_inr: Optional[int]
     mismatch: bool
-    screenshot: dict
+    screenshot: Optional[dict]
+    reply: str
+
+    def to_dict(self) -> dict:
+        return {
+            "flight": self.flight,
+            "booking": self.booking,
+            "price_inr": self.price_inr,
+            "mismatch": self.mismatch,
+            "reply": self.reply,
+        }
+
+
+def chooser_for_version(version: str) -> Chooser:
+    if version == "v2":
+        return ScriptedChooser(trust_doc=False, sponsored_first=False)
+    if version == "v1":
+        return ScriptedChooser()
+    raise ValueError(f"unknown TravelBot version {version!r}")
 
 
 class TravelBot:
@@ -103,14 +107,20 @@ class TravelBot:
         site: Optional[AirlineSite] = None,
         buyer: Optional[Buyer] = None,
         *,
+        chooser: Optional[Chooser] = None,
+        version: str = "v1",
         sms: Optional[SmsGateway] = None,
         blobs: Optional[BlobStore] = None,
+        capture_screenshots: bool = True,
         user_number: str = "+910000000000",
     ) -> None:
         self.site = site or AirlineSite()
         self.buyer = buyer or ScriptedBuyer()
+        self.chooser = chooser or chooser_for_version(version)
+        self.version = version
         self.sms = sms or SmsGateway()
         self.blobs = blobs or BlobStore()
+        self.capture_screenshots = capture_screenshots
         self.user_number = user_number
         self._define_tools()
 
@@ -158,10 +168,21 @@ class TravelBot:
             },
         )
 
-        choice = self._choose(intent, search["results"], doc)
-        session = self.open_negotiation(choice["flight"])
+        choice = self.chooser.choose(ChoiceTask(intent, search["results"], doc))
+        emit_span(
+            "decision",
+            "choose_flight",
+            {"intent": intent.text, "doc_id": doc["doc_id"]},
+            choice.to_dict(doc["doc_id"]),
+        )
+        if choice.chosen is None:
+            reply = "I couldn't find a flight that matches your request, so I haven't booked anything."
+            self.sms.send(self.user_number, reply)
+            return TravelBotResult(intent, None, None, None, False, None, reply)
+
+        session = self.open_negotiation(choice.chosen["flight"])
         goal = int(round(session["list_price_inr"] * 0.88, -2))
-        reply = run_negotiation(
+        negotiation = run_negotiation(
             lambda sid, levers, target: self.negotiate(sid, levers, target),
             session,
             self.buyer,
@@ -169,53 +190,23 @@ class TravelBot:
             goal_price_inr=goal,
         )
 
-        booking = self.book_flight(choice["flight"], reply["price_inr"], data.COUNTRY, reply["quote_id"])
-        screenshot = self._capture(booking)
-        mismatch = bool(intent.part_of_day) and part_of_day(booking["depart_at"]) != intent.part_of_day
-        self.sms.send(
-            self.user_number,
-            f"Booked {booking['flight']} departing {booking['depart_at'][-5:]} for "
-            f"₹{booking['price_inr']:,.0f}. PNR {booking['pnr']}.",
+        booking = self.book_flight(
+            choice.chosen["flight"], negotiation["price_inr"], data.COUNTRY, negotiation["quote_id"]
         )
+        screenshot = self._capture(booking) if self.capture_screenshots else None
+        mismatch = bool(intent.part_of_day) and part_of_day(booking["depart_at"]) != intent.part_of_day
+        reply = (
+            f"Booked {booking['flight']} departing {booking['depart_at'][-5:]} for "
+            f"₹{booking['price_inr']:,.0f}. PNR {booking['pnr']}."
+        )
+        self.sms.send(self.user_number, reply)
 
         if mismatch and attempt_fix:
             self._attempt_fix(intent, search["results"])
 
-        return TravelBotResult(intent, choice["flight"], booking, int(booking["price_inr"]), mismatch, screenshot)
-
-    def _choose(self, intent: Intent, results: List[dict], doc: dict) -> dict:
-        believed_times = dict(_DOC_TIME.findall(doc["text"]))
-        considered = []
-        chosen = None
-        for result in sorted(results, key=lambda r: r["rank"]):
-            listed = result["depart_at"][-5:]
-            believed = believed_times.get(result["flight"], listed)
-            fits = (
-                result["price_inr"] <= intent.budget_inr
-                and (intent.part_of_day is None or part_of_day(believed) == intent.part_of_day)
-            )
-            considered.append(
-                {
-                    "flight": result["flight"],
-                    "price_inr": result["price_inr"],
-                    "sponsored": result["sponsored"],
-                    "rank": result["rank"],
-                    "listed_depart": listed,
-                    "believed_depart": believed,
-                    "fits": fits,
-                }
-            )
-            if fits and chosen is None:
-                chosen = considered[-1]
-        if chosen is None:
-            raise ValueError("no flight fits the request")
-        emit_span(
-            "decision",
-            "choose_flight",
-            {"intent": intent.text, "doc_id": doc["doc_id"]},
-            {"chosen": chosen, "considered": considered, "belief_source": doc["doc_id"]},
+        return TravelBotResult(
+            intent, choice.chosen["flight"], booking, int(booking["price_inr"]), mismatch, screenshot, reply
         )
-        return chosen
 
     def _capture(self, booking: dict) -> dict:
         page = AirlineSite.confirmation_html(booking)
@@ -231,3 +222,12 @@ class TravelBot:
             if part_of_day(result["depart_at"]) == intent.part_of_day:
                 self.book_flight(result["flight"], result["price_inr"], data.COUNTRY, None)
                 return
+
+
+def entrypoint(sms_body: str) -> dict:
+    """Regression-test entrypoint: tools are mocked from the recorded run, the version is chosen by env."""
+    bot = TravelBot(
+        version=os.environ.get("TRAVELBOT_VERSION", "v1"),
+        capture_screenshots=False,
+    )
+    return bot.run(sms_body).to_dict()

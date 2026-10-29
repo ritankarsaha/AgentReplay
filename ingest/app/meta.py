@@ -15,6 +15,7 @@ from typing import Any, Optional
 from .pricing import estimate_cost_usd
 
 DEFAULT_MAX_TOKENS = 4096
+REQUEST_TIMEOUT_S = 120.0
 
 
 class MetaResponseError(Exception):
@@ -68,7 +69,7 @@ def call_meta_tool(
 ) -> MetaToolResult:
     import openai
 
-    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=REQUEST_TIMEOUT_S)
     response = client.chat.completions.create(
         model=model,
         max_tokens=max_tokens,

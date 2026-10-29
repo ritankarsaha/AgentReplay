@@ -38,3 +38,31 @@ def recorded(monkeypatch):
 
     monkeypatch.setattr(SpanCollector, "add", add)
     return seen
+
+
+SMS = "Book BLR→CCU Friday morning, under ₹6000."
+
+
+@pytest.fixture
+def travelbot_trace(monkeypatch, tmp_path, recorded):
+    """Spans (ingest wire shape) of a guarded v1 TravelBot run that ends in a halted second booking."""
+    import agentreplay
+    from controlplane.blobs import BlobStore
+    from controlplane.govern import Monitor, ScopeGuard, generate_keypair
+    from controlplane.transact import travelbot as tb
+
+    monkeypatch.setattr(tb, "capture_png", lambda html: b"\x89PNG-fake")
+    keypair = generate_keypair()
+    guard = ScopeGuard(
+        tb.travelbot_manifest(keypair), keypair.public_key, bindings=tb.BINDINGS, arg_names=tb.ARG_NAMES, monitor=Monitor()
+    )
+    agentreplay.set_tool_guard(guard)
+    agentreplay.init(api_key="k", project_id="p")
+    try:
+        tb.TravelBot(blobs=BlobStore(str(tmp_path))).run(SMS, attempt_fix=True)
+    except agentreplay.ScopeViolation:
+        pass
+    agentreplay.set_tool_guard(None)
+    spans = [s.to_dict() for s in recorded]
+    _state.reset()
+    return {"spans": spans, "agent_id": keypair.agent_id}

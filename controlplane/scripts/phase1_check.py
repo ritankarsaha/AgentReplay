@@ -9,15 +9,7 @@ with the ingest virtualenv (it needs FastAPI/uvicorn):
 
 from __future__ import annotations
 
-import hashlib
-import os
-import socket
-import sqlite3
-import subprocess
 import sys
-import tempfile
-import time
-from pathlib import Path
 
 import httpx
 
@@ -26,8 +18,8 @@ from agentreplay import ScopeViolation
 from controlplane.client import ControlPlaneClient, trust_refresher
 from controlplane.govern import Monitor, ScopeGuard, ToolBinding, generate_keypair, sign_manifest
 from controlplane.govern.trust import compute_trust
+from controlplane.scripts._local_ingest import LocalIngest
 
-ROOT = Path(__file__).resolve().parents[2]
 API_KEY = "ar_phase1_check_key"
 PROJECT_ID = "proj_phase1"
 LIVE_TOOL_CALLS = {"count": 0}
@@ -61,59 +53,15 @@ def replay_entrypoint() -> None:
     scripted_agent()
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
-def _start_ingest(db_path: Path, port: int) -> subprocess.Popen:
-    env = {
-        **os.environ,
-        "AGENTREPLAY_INGEST_DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
-        "AGENTREPLAY_INGEST_ENVIRONMENT": "development",
-        "AGENTREPLAY_INGEST_CLASSIFIER_BACKEND": "none",
-    }
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(port), "--log-level", "warning"],
-        cwd=ROOT / "ingest",
-        env=env,
-    )
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        try:
-            if httpx.get(f"http://127.0.0.1:{port}/docs", timeout=1).status_code == 200:
-                return proc
-        except httpx.RequestError:
-            time.sleep(0.3)
-    proc.terminate()
-    raise RuntimeError("local ingest did not start")
-
-
-def _seed_project(db_path: Path) -> None:
-    con = sqlite3.connect(db_path)
-    con.execute(
-        "INSERT INTO projects (id, name, api_key_hash) VALUES (?, ?, ?)",
-        (PROJECT_ID, "phase1", hashlib.sha256(API_KEY.encode()).hexdigest()),
-    )
-    con.commit()
-    con.close()
-
-
 def _check(label: str, ok: bool, detail: str = "") -> bool:
     print(f"[{'ok' if ok else 'FAIL'}] {label}{': ' + detail if detail else ''}")
     return ok
 
 
 def main() -> int:
-    tmp = Path(tempfile.mkdtemp(prefix="phase1_"))
-    db_path = tmp / "ingest.db"
-    port = _free_port()
-    endpoint = f"http://127.0.0.1:{port}"
-    server = _start_ingest(db_path, port)
     results = []
-    try:
-        _seed_project(db_path)
+    with LocalIngest(API_KEY, PROJECT_ID) as ingest:
+        endpoint = ingest.endpoint
         client = ControlPlaneClient(API_KEY, endpoint)
 
         keypair = generate_keypair()
@@ -178,9 +126,6 @@ def main() -> int:
             replayed = exc
         results.append(_check("replay reproduces the violation", replayed is not None and replayed.rule == "tool_not_allowed"))
         results.append(_check("replay made zero live tool calls", LIVE_TOOL_CALLS["count"] == before, f"{LIVE_TOOL_CALLS['count'] - before} live calls"))
-    finally:
-        server.terminate()
-        server.wait(timeout=10)
 
     print("PASS" if all(results) else "FAIL")
     return 0 if all(results) else 1

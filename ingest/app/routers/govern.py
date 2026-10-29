@@ -9,13 +9,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import crud
+from ..classifier import CLASSIFIABLE_STATUSES, classify_run_async
+from ..config import Settings, get_settings
 from ..db import get_db
 from ..deps import get_current_project
 from ..manifests import agent_id_for, verify_manifest_signature
 from ..models import (
     AccessToken,
     Agent,
+    Filing,
     Incident,
+    ModelRun,
     Project,
     RegressionCase,
     Run,
@@ -79,7 +84,55 @@ class IncidentOut(BaseModel):
     severity: str
     culprit_span_id: Optional[str]
     status: str
+    details: Dict[str, Any] = Field(default_factory=dict)
     created_at: Optional[datetime]
+
+
+class IncidentDetailsIn(BaseModel):
+    details: Dict[str, Any]
+
+
+class FilingIn(BaseModel):
+    type: str = Field(pattern="^(dispute|claim)$")
+    packet: Dict[str, Any]
+    trace_hash: str = Field(min_length=16, max_length=128)
+    simulated: bool = True
+
+
+class FilingOut(BaseModel):
+    id: str
+    incident_id: str
+    type: str
+    packet: Dict[str, Any]
+    trace_hash: str
+    simulated: bool
+    created_at: Optional[datetime]
+
+
+class ModelRunIn(BaseModel):
+    source_run_id: str
+    span_id: str
+    model: str
+    output: Optional[Any] = None
+    verdict: Optional[str] = None
+    cost_usd: Optional[float] = None
+
+
+class ModelRunsIn(BaseModel):
+    runs: List[ModelRunIn] = Field(min_length=1, max_length=500)
+
+
+class ModelRunOut(ModelRunIn):
+    id: str
+    created_at: Optional[datetime]
+
+
+class ClassifyOut(BaseModel):
+    run_id: str
+    classification_status: str
+    failure_class: Optional[str]
+    culprit_span_id: Optional[str]
+    diagnosis: Optional[Dict[str, Any]]
 
 
 class TrustIn(BaseModel):
@@ -324,6 +377,116 @@ async def get_incident(
     incident_id: str, project: Project = Depends(get_current_project), db: AsyncSession = Depends(get_db)
 ) -> IncidentOut:
     return IncidentOut.model_validate(await _incident_or_404(db, project, incident_id), from_attributes=True)
+
+
+@router.post("/v1/incidents/{incident_id}/details", response_model=IncidentOut)
+async def merge_incident_details(
+    incident_id: str,
+    body: IncidentDetailsIn,
+    project: Project = Depends(get_current_project),
+    db: AsyncSession = Depends(get_db),
+) -> IncidentOut:
+    """Shallow-merge top-level keys (classification, causation, data_findings, ...) into `details`."""
+    row = await _incident_or_404(db, project, incident_id)
+    row.details = {**(row.details or {}), **body.details}
+    await db.flush()
+    return IncidentOut.model_validate(row, from_attributes=True)
+
+
+@router.post("/v1/incidents/{incident_id}/classify", response_model=ClassifyOut)
+async def classify_incident_run(
+    incident_id: str,
+    project: Project = Depends(get_current_project),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> ClassifyOut:
+    """Classify the incident's run now (idempotent). 503 if no classifier backend is configured."""
+    incident = await _incident_or_404(db, project, incident_id)
+    run = await crud.get_run_with_spans(db, project_id=project.id, run_id=incident.run_id)
+    if run is None or run.status not in CLASSIFIABLE_STATUSES:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Run is not in a classifiable state")
+    if not settings.classifier_configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "No classifier backend is configured")
+    await classify_run_async(run.id, db, settings)
+    await db.refresh(run)
+    return ClassifyOut(
+        run_id=run.id,
+        classification_status=run.classification_status,
+        failure_class=run.failure_class,
+        culprit_span_id=run.root_span_id,
+        diagnosis=run.diagnosis,
+    )
+
+
+@router.post("/v1/incidents/{incident_id}/filings", response_model=FilingOut, status_code=status.HTTP_201_CREATED)
+async def put_filing(
+    incident_id: str,
+    body: FilingIn,
+    project: Project = Depends(get_current_project),
+    db: AsyncSession = Depends(get_db),
+) -> FilingOut:
+    """Store a dispute or claim packet; regenerating replaces the previous packet of that type."""
+    await _incident_or_404(db, project, incident_id)
+    existing = (
+        await db.execute(select(Filing).where(Filing.incident_id == incident_id, Filing.type == body.type))
+    ).scalars().all()
+    for row in existing:
+        await db.delete(row)
+    filing = Filing(
+        id=str(uuid.uuid4()),
+        incident_id=incident_id,
+        type=body.type,
+        packet=body.packet,
+        trace_hash=body.trace_hash,
+        simulated=body.simulated,
+    )
+    db.add(filing)
+    await db.flush()
+    await db.refresh(filing)
+    return FilingOut.model_validate(filing, from_attributes=True)
+
+
+@router.get("/v1/incidents/{incident_id}/filings", response_model=List[FilingOut])
+async def list_filings(
+    incident_id: str, project: Project = Depends(get_current_project), db: AsyncSession = Depends(get_db)
+) -> List[FilingOut]:
+    await _incident_or_404(db, project, incident_id)
+    rows = (
+        await db.execute(select(Filing).where(Filing.incident_id == incident_id).order_by(Filing.type))
+    ).scalars()
+    return [FilingOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/v1/model-runs", response_model=List[ModelRunOut], status_code=status.HTTP_201_CREATED)
+async def record_model_runs(
+    body: ModelRunsIn, project: Project = Depends(get_current_project), db: AsyncSession = Depends(get_db)
+) -> List[ModelRunOut]:
+    source_ids = {r.source_run_id for r in body.runs}
+    owned = set(
+        (await db.execute(select(Run.id).where(Run.project_id == project.id, Run.id.in_(source_ids)))).scalars()
+    )
+    if source_ids - owned:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Source run not found")
+    rows = [ModelRun(id=str(uuid.uuid4()), project_id=project.id, **r.model_dump()) for r in body.runs]
+    db.add_all(rows)
+    await db.flush()
+    for row in rows:
+        await db.refresh(row)
+    return [ModelRunOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.get("/v1/model-runs", response_model=List[ModelRunOut])
+async def list_model_runs(
+    source_run_id: Optional[str] = None,
+    limit: int = Query(default=500, ge=1, le=2000),
+    project: Project = Depends(get_current_project),
+    db: AsyncSession = Depends(get_db),
+) -> List[ModelRunOut]:
+    stmt = select(ModelRun).where(ModelRun.project_id == project.id)
+    if source_run_id:
+        stmt = stmt.where(ModelRun.source_run_id == source_run_id)
+    rows = (await db.execute(stmt.order_by(ModelRun.created_at.desc()).limit(limit))).scalars()
+    return [ModelRunOut.model_validate(r, from_attributes=True) for r in rows]
 
 
 @router.post("/v1/incidents/{incident_id}/resolve", response_model=IncidentOut)

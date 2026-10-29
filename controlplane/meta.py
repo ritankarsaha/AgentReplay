@@ -15,6 +15,7 @@ DEFAULT_MODEL = "muse-spark-1.3"
 SAM_MODEL = "sam-3.1"
 
 MIN_MAX_TOKENS = 2000
+REQUEST_TIMEOUT_S = 120.0
 
 
 class MetaNotConfigured(Exception):
@@ -32,7 +33,9 @@ def meta_client(api_key: Optional[str] = None, base_url: Optional[str] = None):
     if not key:
         raise MetaNotConfigured("META_API_KEY is not set (see .env.example)")
     return openai.OpenAI(
-        api_key=key, base_url=base_url or os.environ.get("META_BASE_URL") or DEFAULT_BASE_URL
+        api_key=key,
+        base_url=base_url or os.environ.get("META_BASE_URL") or DEFAULT_BASE_URL,
+        timeout=REQUEST_TIMEOUT_S,
     )
 
 

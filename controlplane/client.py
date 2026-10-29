@@ -42,7 +42,11 @@ class ControlPlaneClient:
             timeout=timeout,
         )
 
-    def _request(self, method: str, path: str, *, ok_404: bool = False, **kwargs: Any) -> Optional[Any]:
+    def _request(
+        self, method: str, path: str, *, ok_404: bool = False, timeout: Optional[float] = None, **kwargs: Any
+    ) -> Optional[Any]:
+        if timeout is not None:
+            kwargs["timeout"] = timeout
         try:
             response = self._http.request(method, path, **kwargs)
         except httpx.RequestError as exc:
@@ -104,6 +108,51 @@ class ControlPlaneClient:
     def list_incidents(self, agent_id: Optional[str] = None, status: Optional[str] = None) -> List[dict]:
         params = {k: v for k, v in (("agent_id", agent_id), ("status", status)) if v}
         return self._request("GET", "/v1/incidents", params=params)
+
+    def get_incident(self, incident_id: str) -> dict:
+        return self._request("GET", f"/v1/incidents/{incident_id}")
+
+    def get_run(self, run_id: str) -> dict:
+        return self._request("GET", f"/v1/runs/{run_id}")
+
+    def classify_incident(self, incident_id: str) -> dict:
+        return self._request("POST", f"/v1/incidents/{incident_id}/classify", timeout=120.0)
+
+    def merge_incident_details(self, incident_id: str, details: dict) -> dict:
+        return self._request("POST", f"/v1/incidents/{incident_id}/details", json={"details": details})
+
+    def resolve_incident(self, incident_id: str) -> dict:
+        return self._request("POST", f"/v1/incidents/{incident_id}/resolve")
+
+    def put_filing(self, incident_id: str, packet: dict) -> dict:
+        return self._request(
+            "POST",
+            f"/v1/incidents/{incident_id}/filings",
+            json={"type": packet["type"], "packet": packet, "trace_hash": packet["trace_hash"], "simulated": packet["simulated"]},
+        )
+
+    def list_filings(self, incident_id: str) -> List[dict]:
+        return self._request("GET", f"/v1/incidents/{incident_id}/filings")
+
+    def manifest_version(self, agent_id: str, version: int) -> Optional[dict]:
+        data = self._request("GET", f"/v1/agents/{agent_id}/manifests/{version}", ok_404=True)
+        return data["manifest"] if data else None
+
+    def capture_case(self, body: dict) -> dict:
+        return self._request("POST", "/v1/regression-cases/capture-production", json=body)
+
+    def set_case_status(self, case_id: str, status: str) -> dict:
+        return self._request("PATCH", f"/v1/regression-cases/{case_id}", json={"status": status})
+
+    def record_model_runs(self, runs: List[dict]) -> List[dict]:
+        out: List[dict] = []
+        for start in range(0, len(runs), 500):
+            out += self._request("POST", "/v1/model-runs", json={"runs": runs[start : start + 500]})
+        return out
+
+    def list_model_runs(self, source_run_id: Optional[str] = None) -> List[dict]:
+        params = {"source_run_id": source_run_id} if source_run_id else {}
+        return self._request("GET", "/v1/model-runs", params=params)
 
 
 def recompute_trust(

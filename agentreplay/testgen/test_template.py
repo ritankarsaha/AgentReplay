@@ -80,6 +80,7 @@ MUST_CALL_TOOLS = {must_call_tools!r}
 MUST_NOT_CALL_TOOLS = {must_not_call_tools!r}
 MAX_STEPS = {max_steps!r}
 NO_EXCEPTION = {no_exception!r}
+OUTPUT_CHECKS = {output_checks!r}
 # Semantic tier (CLAUDE.md §4 chunk 4.7) -- an LLM-judge rubric for output
 # CONTENT, layered on top of the structural checks above. None if this
 # failure is already fully captured by them.
@@ -102,6 +103,7 @@ def test_run_{run_id_slug}():
     assertions.assert_must_call_tools(tool_run, MUST_CALL_TOOLS)
     assertions.assert_must_not_call_tools(tool_run, MUST_NOT_CALL_TOOLS)
     assertions.assert_max_steps(tool_run, MAX_STEPS)
+    assertions.assert_output_checks(result, OUTPUT_CHECKS)
     assertions.assert_semantic(result, SEMANTIC_RUBRIC)
 '''
 
@@ -143,6 +145,7 @@ def render_test_module(
         must_not_call_tools=list(assertion_spec.get("must_not_call_tools") or []),
         max_steps=assertion_spec.get("max_steps"),
         no_exception=bool(assertion_spec.get("no_exception", True)),
+        output_checks=list(assertion_spec.get("output_checks") or []),
         semantic_rubric=assertion_spec.get("semantic_rubric"),
     )
 

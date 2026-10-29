@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import Table, case, func, select
@@ -379,6 +379,8 @@ async def insert_test_result(
         pass_rate=(passes / trials) if trials else 0.0,
         verdict=verdict,
         details=details,
+        created_at=datetime.now(timezone.utc),
+        judged_at=datetime.now(timezone.utc),
     )
     session.add(result)
     await session.flush()

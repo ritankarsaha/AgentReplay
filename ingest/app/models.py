@@ -264,6 +264,7 @@ class Incident(Base):
     culprit_span_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     # open | resolved
     status: Mapped[str] = mapped_column(String, nullable=False, default="open", server_default="open")
+    details: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

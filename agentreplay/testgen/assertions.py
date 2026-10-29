@@ -51,6 +51,52 @@ def assert_max_steps(tool_run: RecordedRun, max_steps: Optional[int]) -> None:
     assert actual <= max_steps, f"expected at most {max_steps} tool-call step(s), agent took {actual}"
 
 
+_MISSING = object()
+
+
+def _resolve_path(value: Any, path: str) -> Any:
+    for part in path.split("."):
+        if isinstance(value, dict):
+            value = value.get(part, _MISSING)
+        else:
+            value = getattr(value, part, _MISSING)
+        if value is _MISSING or value is None:
+            return _MISSING if value is _MISSING else None
+    return value
+
+
+def _minutes(clock: str) -> int:
+    hours, minutes = clock[-5:].split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def _check_one(result: Any, check: dict) -> Optional[str]:
+    path, op = check["path"], check["op"]
+    value = _resolve_path(result, path)
+    if value is _MISSING or value is None:
+        return None if check.get("allow_missing") else f"'{path}' is missing from the agent output"
+    label = check.get("description") or f"{path} {op}"
+    if op == "time_in_window":
+        moment = _minutes(str(value))
+        if not _minutes(check["start"]) <= moment < _minutes(check["end"]):
+            return f"{label}: got {value!r}, expected a time in [{check['start']}, {check['end']})"
+    elif op == "lte":
+        if not value <= check["value"]:
+            return f"{label}: got {value!r}, expected <= {check['value']!r}"
+    elif op == "eq":
+        if value != check["value"]:
+            return f"{label}: got {value!r}, expected {check['value']!r}"
+    else:
+        return f"unknown output check op {op!r}"
+    return None
+
+
+def assert_output_checks(result: Any, checks: Optional[Iterable[dict]]) -> None:
+    """Fail if any structured check on the agent's returned value does not hold."""
+    failures = [message for check in checks or [] if (message := _check_one(result, check))]
+    assert not failures, "output checks failed: " + "; ".join(failures)
+
+
 class SemanticJudgeNotConfigured(Exception):
     """Raised when `assert_semantic()` needs a judge call but can't make one.
 
@@ -183,7 +229,14 @@ def _judge_with_nim(actual_output: Any, rubric: str, *, model: str) -> SemanticJ
     )
 
 
-def _judge_with_meta(actual_output: Any, rubric: str, *, model: str) -> SemanticJudgment:
+def _judge_with_meta(
+    actual_output: Any,
+    rubric: str,
+    *,
+    model: str,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> SemanticJudgment:
     """Meta rejects a forced `tool_choice` and spends reasoning tokens against
     `max_tokens`, so this uses "auto", a generous cap, and a JSON-text fallback."""
     try:
@@ -194,17 +247,19 @@ def _judge_with_meta(actual_output: Any, rubric: str, *, model: str) -> Semantic
             "(pip install openai)"
         ) from exc
 
-    api_key = os.environ.get("AGENTREPLAY_SEMANTIC_JUDGE_META_API_KEY") or os.environ.get(
-        "META_API_KEY"
+    api_key = (
+        api_key
+        or os.environ.get("AGENTREPLAY_SEMANTIC_JUDGE_META_API_KEY")
+        or os.environ.get("META_API_KEY")
     )
     if not api_key:
         raise SemanticJudgeNotConfigured(
             "AGENTREPLAY_SEMANTIC_JUDGE_META_API_KEY (or META_API_KEY) is not set — required "
             "for the meta semantic-judge backend (AGENTREPLAY_SEMANTIC_JUDGE_BACKEND=meta)"
         )
-    base_url = os.environ.get("META_BASE_URL") or DEFAULT_SEMANTIC_JUDGE_META_BASE_URL
+    base_url = base_url or os.environ.get("META_BASE_URL") or DEFAULT_SEMANTIC_JUDGE_META_BASE_URL
 
-    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=120.0)
     response = client.chat.completions.create(
         model=model,
         max_tokens=4096,
@@ -296,4 +351,5 @@ def run_assertion_spec(
     assert_must_call_tools(tool_run, spec.get("must_call_tools") or [])
     assert_must_not_call_tools(tool_run, spec.get("must_not_call_tools") or [])
     assert_max_steps(tool_run, spec.get("max_steps"))
+    assert_output_checks(result, spec.get("output_checks"))
     assert_semantic(result, spec.get("semantic_rubric"))

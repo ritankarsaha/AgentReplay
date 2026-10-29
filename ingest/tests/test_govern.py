@@ -223,3 +223,83 @@ async def test_token_lifecycle_and_tenancy(client):
     revoked = await client.post(f"/v1/tokens/{token_id}/revoke", headers=h)
     assert revoked.json()["revoked_at"] is not None
     assert (await client.get(f"/v1/tokens/{token_id}", headers=h)).json()["revoked_at"] is not None
+
+
+async def _halted_incident(client, run_id="run-i"):
+    h = auth_headers()
+    await client.post(
+        "/v1/spans",
+        json={"spans": [_span(run_id, "alert", "agentreplay.halt", input_={"kind": "scope_violation"})]},
+        headers=h,
+    )
+    return (await client.get("/v1/incidents", headers=h)).json()[0]["id"]
+
+
+async def test_incident_details_merge_is_shallow_and_tenant_scoped(client):
+    incident_id = await _halted_incident(client)
+    h = auth_headers()
+    assert (await client.get(f"/v1/incidents/{incident_id}", headers=h)).json()["details"] == {}
+    await client.post(f"/v1/incidents/{incident_id}/details", json={"details": {"causation": ["a"], "x": 1}}, headers=h)
+    merged = await client.post(f"/v1/incidents/{incident_id}/details", json={"details": {"x": 2}}, headers=h)
+    assert merged.json()["details"] == {"causation": ["a"], "x": 2}
+    other = auth_headers(OTHER_API_KEY)
+    assert (await client.post(f"/v1/incidents/{incident_id}/details", json={"details": {}}, headers=other)).status_code == 404
+
+
+async def test_filings_are_replaced_per_type_and_validated(client):
+    incident_id = await _halted_incident(client)
+    h = auth_headers()
+    body = {"type": "dispute", "packet": {"v": 1}, "trace_hash": "a" * 64}
+    assert (await client.post(f"/v1/incidents/{incident_id}/filings", json=body, headers=h)).status_code == 201
+    await client.post(f"/v1/incidents/{incident_id}/filings", json={**body, "packet": {"v": 2}}, headers=h)
+    await client.post(f"/v1/incidents/{incident_id}/filings", json={**body, "type": "claim"}, headers=h)
+    filings = (await client.get(f"/v1/incidents/{incident_id}/filings", headers=h)).json()
+    assert [(f["type"], f["packet"]) for f in filings] == [("claim", {"v": 1}), ("dispute", {"v": 2})]
+    assert all(f["simulated"] for f in filings)
+    bad = await client.post(f"/v1/incidents/{incident_id}/filings", json={**body, "type": "refund"}, headers=h)
+    assert bad.status_code == 422
+    other = auth_headers(OTHER_API_KEY)
+    assert (await client.get(f"/v1/incidents/{incident_id}/filings", headers=other)).status_code == 404
+
+
+async def test_model_runs_roundtrip_and_source_run_must_belong_to_project(client):
+    h = auth_headers()
+    await client.post("/v1/spans", json={"spans": [_span("run-m", "tool", "x")]}, headers=h)
+    runs = [
+        {"source_run_id": "run-m", "span_id": "s1", "model": "muse-spark-1.3", "output": {"flight": "6E-871"}, "verdict": "repeats_mistake", "cost_usd": 0.01},
+        {"source_run_id": "run-m", "span_id": "s1", "model": "muse-spark-1.1", "verdict": "ok"},
+    ]
+    created = await client.post("/v1/model-runs", json={"runs": runs}, headers=h)
+    assert created.status_code == 201 and len(created.json()) == 2
+    listed = (await client.get("/v1/model-runs?source_run_id=run-m", headers=h)).json()
+    assert {r["model"] for r in listed} == {"muse-spark-1.3", "muse-spark-1.1"}
+
+    other = auth_headers(OTHER_API_KEY)
+    assert (await client.post("/v1/model-runs", json={"runs": runs}, headers=other)).status_code == 404
+    assert (await client.get("/v1/model-runs", headers=other)).json() == []
+
+
+async def test_classify_incident_run(client, monkeypatch):
+    incident_id = await _halted_incident(client, "run-c")
+    h = auth_headers()
+
+    from app.routers import govern
+
+    async def fake_classify(run_id, session, settings):
+        run = await govern.crud.get_run_with_spans_by_id(session, run_id=run_id)
+        run.failure_class = "disobey_task_specification"
+        run.classification_status = "done"
+        run.diagnosis = {"text": "wrong flight"}
+        await session.commit()
+
+    monkeypatch.setattr(govern, "classify_run_async", fake_classify)
+    unconfigured = await client.post(f"/v1/incidents/{incident_id}/classify", headers=h)
+    assert unconfigured.status_code == 503
+
+    monkeypatch.setenv("AGENTREPLAY_INGEST_CLASSIFIER_BACKEND", "meta")
+    monkeypatch.setenv("AGENTREPLAY_INGEST_META_API_KEY", "k")
+    done = await client.post(f"/v1/incidents/{incident_id}/classify", headers=h)
+    assert done.status_code == 200
+    assert done.json()["failure_class"] == "disobey_task_specification"
+    assert done.json()["classification_status"] == "done"
+    assert (await client.post(f"/v1/incidents/{incident_id}/classify", headers=auth_headers(OTHER_API_KEY))).status_code == 404
