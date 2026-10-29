@@ -88,3 +88,13 @@ class ReplayedError(ReplayError):
             self.original_type
         )
         super().__init__(f"[replayed] {self.original_type}: {self.original_message}")
+
+
+class ScopeViolation(AgentReplayError):
+
+    def __init__(self, tool: str, rule: str, reason: str, decision: Optional[dict] = None) -> None:
+        self.tool = tool
+        self.rule = rule
+        self.reason = reason
+        self.decision = decision or {}
+        super().__init__(f"ScopeViolation on '{tool}' [{rule}]: {reason}")

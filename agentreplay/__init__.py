@@ -9,9 +9,10 @@ from . import _state, nondeterminism, patching
 from .checkpoint import checkpoint
 from .collector import get_collector
 from .config import DEFAULT_ENDPOINT, Config, RedactFn
-from .exceptions import AgentReplayError, ConfigurationError
+from .exceptions import AgentReplayError, ConfigurationError, ScopeViolation
 from .exporter import DEFAULT_FLUSH_INTERVAL, DEFAULT_MAX_BATCH_SIZE, BackgroundExporter
 from .fail import fail, track
+from .guard import GuardDecision, get_tool_guard, set_tool_guard
 from .redaction import DEFAULT_PII_FIELD_NAMES, redact_fields, redact_pii
 from .span import Span
 from .tool import tool
@@ -33,6 +34,10 @@ __all__ = [
     "track",
     "AgentReplayError",
     "ConfigurationError",
+    "ScopeViolation",
+    "GuardDecision",
+    "set_tool_guard",
+    "get_tool_guard",
     "redact_fields",
     "redact_pii",
     "DEFAULT_PII_FIELD_NAMES",

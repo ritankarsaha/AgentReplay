@@ -36,6 +36,7 @@ by this tool's `span_name` instead of an LLM call-site name.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import sys
@@ -46,7 +47,8 @@ from typing import Any, Callable, Optional, TypeVar
 
 from . import _state
 from .collector import get_collector
-from .exceptions import ReplayDivergence, ReplayedError
+from .exceptions import ReplayDivergence, ReplayedError, ScopeViolation
+from .guard import GuardDecision, emit_span
 from .fingerprint import compute_fingerprint
 from .patching.common import build_error_payload
 from .serialize import safe_serialize
@@ -89,6 +91,65 @@ def _resolve_replay(run: Any, span_name: str, args: tuple, kwargs: dict) -> Any:
     if call.error is not None:
         raise ReplayedError(call.error)
     return from_typed_json(call.output)
+
+
+def _enforce(guard: Any, span_name: str, args: tuple, kwargs: dict) -> None:
+    """Consult the installed guard; record a `policy` span; raise on denial."""
+    payload = _build_tool_payload(args, kwargs)
+    try:
+        decision = guard.check(span_name, args, kwargs)
+    except Exception as exc:  # fail closed
+        decision = GuardDecision(False, "guard_error", f"{type(exc).__name__}: {exc}")
+    decision_dict = decision.to_dict()
+    emit_span("policy", span_name, payload, decision_dict, None)
+    if decision.allowed:
+        return
+    violation = ScopeViolation(span_name, decision.rule, decision.reason, decision_dict)
+    span_id = emit_span("scope_violation", span_name, payload, decision_dict, build_error_payload(violation))
+    on_violation = getattr(guard, "on_violation", None)
+    if on_violation is not None:
+        try:
+            on_violation(span_name, decision, span_id)
+        except Exception:
+            print(f"agentreplay: guard.on_violation failed ({span_name})", file=sys.stderr)
+    raise violation
+
+
+def _replay_policy(span_name: str, args: tuple, kwargs: dict) -> None:
+    """Serve a recorded policy denial during strict replay (the tool body never runs)."""
+    run = _state.get_active_policy_replay_run()
+    if run is None:
+        return
+    payload = _build_tool_payload(args, kwargs)
+    call = run.resolve(span_name, {"tool": span_name, "input": payload})
+    if call is None or not isinstance(call.output, dict) or call.output.get("decision") != "deny":
+        return
+    raise ScopeViolation(
+        span_name, call.output.get("rule", ""), call.output.get("reason", ""), call.output
+    )
+
+
+async def _await_unless_halted(guard: Any, awaitable: Any, span_name: str) -> Any:
+    """Await a tool; cancel it if the guard reports the run halted mid-flight."""
+    is_halted = getattr(guard, "is_halted", None)
+    if is_halted is None:
+        return await awaitable
+    task = asyncio.ensure_future(awaitable)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=0.05)
+            if done:
+                return task.result()
+            if is_halted():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                raise ScopeViolation(span_name, "run_halted", "run halted while the call was in flight")
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
 
 
 def _start(span_name: str, args: tuple, kwargs: dict) -> dict:
@@ -152,6 +213,11 @@ def tool(func: Optional[F] = None, *, name: Optional[str] = None) -> Any:
     function is never called at all — the recorded output (or recorded
     error, re-raised as `ReplayedError`) is returned instead, regardless of
     `init()`/`enabled` state. See the module docstring's "Replay mode" note.
+
+    If a guard is installed (`agentreplay.set_tool_guard`), each call is
+    checked first and recorded as a `policy` span; a denial raises
+    `ScopeViolation` (plus a `scope_violation` span) before the body runs.
+    Enforcement applies even when recording is disabled.
     """
 
     def decorator(fn: F) -> F:
@@ -163,14 +229,24 @@ def tool(func: Optional[F] = None, *, name: Optional[str] = None) -> Any:
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 active_replay_run = _state.get_active_tool_replay_run()
                 if active_replay_run is not None:
+                    _replay_policy(span_name, args, kwargs)
                     return _resolve_replay(active_replay_run, span_name, args, kwargs)
 
+                guard = _state.get_tool_guard()
+                if guard is not None:
+                    _enforce(guard, span_name, args, kwargs)
+
                 if not _state.is_initialized() or not _state.get_config().enabled:
-                    return await fn(*args, **kwargs)
+                    if guard is None:
+                        return await fn(*args, **kwargs)
+                    return await _await_unless_halted(guard, fn(*args, **kwargs), span_name)
 
                 ctx = _start(span_name, args, kwargs)
                 try:
-                    result = await fn(*args, **kwargs)
+                    if guard is None:
+                        result = await fn(*args, **kwargs)
+                    else:
+                        result = await _await_unless_halted(guard, fn(*args, **kwargs), span_name)
                 except Exception as exc:
                     _finish(ctx, output=None, error=build_error_payload(exc))
                     raise
@@ -183,7 +259,12 @@ def tool(func: Optional[F] = None, *, name: Optional[str] = None) -> Any:
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             active_replay_run = _state.get_active_tool_replay_run()
             if active_replay_run is not None:
+                _replay_policy(span_name, args, kwargs)
                 return _resolve_replay(active_replay_run, span_name, args, kwargs)
+
+            guard = _state.get_tool_guard()
+            if guard is not None:
+                _enforce(guard, span_name, args, kwargs)
 
             if not _state.is_initialized() or not _state.get_config().enabled:
                 return fn(*args, **kwargs)

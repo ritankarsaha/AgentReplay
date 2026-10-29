@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .security import generate_api_key, generate_project_id, hash_api_key
-from .models import LoginEvent, Project, RegressionCase, Run, SpanModel, TestResult
+from .models import Agent, Incident, LoginEvent, Project, RegressionCase, Run, SpanModel, TestResult
 from .schemas import SpanIn
 
 # Must match `agentreplay/fail.py`'s `FAIL_SPAN_TYPE`/`FAIL_SPAN_NAME` — the
@@ -20,6 +20,11 @@ from .schemas import SpanIn
 # (type, name), and `_failure_signals()` below recognizes it during ingest.
 FAILURE_SPAN_TYPE = "checkpoint"
 FAILURE_SPAN_NAME = "agentreplay.fail"
+
+# Must match `controlplane/govern/monitor.py`.
+HALT_SPAN_TYPE = "alert"
+HALT_SPAN_NAME = "agentreplay.halt"
+_INCIDENT_KINDS = {"scope_violation": "scope_violation", "spend_gate": "spend_breach"}
 
 
 def _insert(session: AsyncSession, table: Table):
@@ -131,6 +136,7 @@ async def upsert_run(
             # `halted` is terminal: a late batch must not downgrade it.
             "status": case(
                 (table.c.status == "halted", "halted"),
+                (stmt.excluded.status == "halted", "halted"),
                 (stmt.excluded.status == "failure", "failure"),
                 else_=table.c.status,
             ),
@@ -160,6 +166,50 @@ def _failure_signals(spans: Sequence[SpanIn]) -> Dict[str, Tuple[Optional[str], 
         if existing is None or span.started_at >= existing[2]:
             latest[span.run_id] = (failure_class, root_span_id, span.started_at)
     return {run_id: (fc, rsid) for run_id, (fc, rsid, _) in latest.items()}
+
+
+def _halt_signals(spans: Sequence[SpanIn]) -> Dict[str, SpanIn]:
+    """Latest `agentreplay.halt` alert span per run (the monitor's kill-switch signal)."""
+    latest: Dict[str, SpanIn] = {}
+    for span in spans:
+        if span.type != HALT_SPAN_TYPE or span.name != HALT_SPAN_NAME:
+            continue
+        existing = latest.get(span.run_id)
+        if existing is None or span.started_at >= existing.started_at:
+            latest[span.run_id] = span
+    return latest
+
+
+async def _open_incidents(
+    session: AsyncSession, *, project_id: str, halts: Dict[str, SpanIn]
+) -> None:
+    """One incident per halt alert; the alert span id is the incident id, so re-sends are no-ops."""
+    if not halts:
+        return
+    agent_ids = {
+        s.input.get("agent_id") for s in halts.values() if isinstance(s.input, dict) and s.input.get("agent_id")
+    }
+    known: Set[str] = set()
+    if agent_ids:
+        rows = await session.execute(
+            select(Agent.id).where(Agent.project_id == project_id, Agent.id.in_(agent_ids))
+        )
+        known = {row[0] for row in rows}
+    table = Incident.__table__
+    for run_id, span in halts.items():
+        payload = span.input if isinstance(span.input, dict) else {}
+        agent_id = payload.get("agent_id")
+        stmt = _insert(session, table).values(
+            id=span.id,
+            project_id=project_id,
+            run_id=run_id,
+            agent_id=agent_id if agent_id in known else None,
+            kind=_INCIDENT_KINDS.get(payload.get("kind"), "scope_violation"),
+            severity=payload.get("severity") or "high",
+            culprit_span_id=payload.get("culprit_span_id"),
+            status="open",
+        )
+        await session.execute(stmt.on_conflict_do_nothing(index_elements=[table.c.id]))
 
 
 async def insert_spans(session: AsyncSession, spans: Sequence[SpanIn]) -> int:
@@ -228,6 +278,7 @@ async def ingest_batch(
             last_seen[span.run_id] = span.started_at
 
     failure_signals = _failure_signals(spans)
+    halt_signals = _halt_signals(spans)
 
     for run_id, started_at in first_seen.items():
         failure_class, root_span_id = failure_signals.get(run_id, (None, None))
@@ -239,12 +290,13 @@ async def ingest_batch(
             last_seen_at=last_seen[run_id],
             agent_version=agent_version,
             framework=framework,
-            status="failure" if run_id in failure_signals else None,
+            status="halted" if run_id in halt_signals else ("failure" if run_id in failure_signals else None),
             failure_class=failure_class,
             root_span_id=root_span_id,
         )
 
     accepted = await insert_spans(session, spans)
+    await _open_incidents(session, project_id=project_id, halts=halt_signals)
     return accepted, set(failure_signals.keys())
 
 

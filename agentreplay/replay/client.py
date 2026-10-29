@@ -18,7 +18,7 @@ from __future__ import annotations
 import importlib
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from .. import _state
 from ..fingerprint import compute_fingerprint
@@ -42,6 +42,7 @@ class ReplaySession:
 
     llm: RecordedRun
     tool: RecordedRun
+    policy: Optional[RecordedRun] = None
 
     def remaining_count(self) -> int:
         return self.llm.remaining_count() + self.tool.remaining_count()
@@ -185,14 +186,17 @@ def replay_mode(spans: Any) -> Iterator[ReplaySession]:
     session = ReplaySession(
         llm=RecordedRun(spans, span_type="llm"),
         tool=RecordedRun(spans, span_type="tool"),
+        policy=RecordedRun(spans, span_type="policy"),
     )
     patch_for_replay(session.llm)
     _state.set_active_tool_replay_run(session.tool)
+    _state.set_active_policy_replay_run(session.policy)
     try:
         yield session
     finally:
         unpatch_replay()
         _state.set_active_tool_replay_run(None)
+        _state.set_active_policy_replay_run(None)
 
 
 @contextmanager

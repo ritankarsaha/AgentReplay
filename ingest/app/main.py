@@ -10,7 +10,7 @@ from . import models
 from .config import get_settings
 from .db import Base, engine
 from .limits import BodySizeLimitMiddleware
-from .routers import account, auth_events, regression, runs, spans, usage
+from .routers import account, auth_events, govern, regression, runs, spans, usage
 
 
 @asynccontextmanager
@@ -42,6 +42,7 @@ def create_app() -> FastAPI:
     app.include_router(regression.router)
     app.include_router(auth_events.router)
     app.include_router(usage.router)
+    app.include_router(govern.router)
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict:

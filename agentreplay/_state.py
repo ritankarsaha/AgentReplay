@@ -20,6 +20,12 @@ _exporter: Optional[BackgroundExporter] = None
 # behave normally" (the default, and what `reset()` restores).
 _active_tool_replay_run: Optional[Any] = None
 
+# Recorded `policy` spans served back during strict replay (see `tool.py`).
+_active_policy_replay_run: Optional[Any] = None
+
+# Optional enforcement hook consulted by `@agentreplay.tool` before the body runs.
+_tool_guard: Optional[Any] = None
+
 # Thread-local stack of "current node span id" (chunk 2.1). Framework
 # adapters (e.g. the LangGraph callback handler) push the active node's span
 # id while a node is executing, so that LLM/tool spans recorded via Layer 1
@@ -85,6 +91,26 @@ def get_active_tool_replay_run() -> Optional[Any]:
     return _active_tool_replay_run
 
 
+def set_active_policy_replay_run(run: Optional[Any]) -> None:
+    global _active_policy_replay_run
+    with _lock:
+        _active_policy_replay_run = run
+
+
+def get_active_policy_replay_run() -> Optional[Any]:
+    return _active_policy_replay_run
+
+
+def set_tool_guard(guard: Optional[Any]) -> None:
+    global _tool_guard
+    with _lock:
+        _tool_guard = guard
+
+
+def get_tool_guard() -> Optional[Any]:
+    return _tool_guard
+
+
 def _node_stack() -> List[str]:
     stack = getattr(_node_stack_local, "stack", None)
     if stack is None:
@@ -129,6 +155,7 @@ def next_nondeterminism_seq(name: str) -> int:
 def reset() -> None:
     """Clear global state. Intended for tests."""
     global _config, _run_id, _exporter, _active_tool_replay_run
+    global _active_policy_replay_run, _tool_guard
     with _lock:
         if _exporter is not None:
             _exporter.shutdown()
@@ -136,6 +163,8 @@ def reset() -> None:
         _run_id = None
         _exporter = None
         _active_tool_replay_run = None
+        _active_policy_replay_run = None
+        _tool_guard = None
     _node_stack().clear()
     with _nondeterminism_lock:
         _nondeterminism_seq.clear()
