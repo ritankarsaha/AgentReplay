@@ -67,5 +67,5 @@ failure to a CI regression case (use the API; see QUICKSTART).
 ## Security
 
 Traces can contain sensitive data. Use the `redact=` hook to scrub it
-client-side (by field name; it does not scan free text) before anything leaves your process — see QUICKSTART. Report
+client-side (by field name; it does not scan free text) before anything leaves your process - see QUICKSTART. Report
 vulnerabilities per [SECURITY.md](SECURITY.md).
