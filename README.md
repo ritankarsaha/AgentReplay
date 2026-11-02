@@ -9,16 +9,16 @@ regression test that gates your CI.
 production failure → deterministic replay → regression test → CI gate
 ```
 
-- **Record** — one `agentreplay.init()` call patches the Anthropic and OpenAI
+- **Record** - one `agentreplay.init()` call patches the Anthropic and OpenAI
   clients (and anything OpenAI-compatible, e.g. NVIDIA NIM). No framework
   lock-in; a LangGraph adapter adds node-level structure.
-- **Diagnose** — failed runs are classified against the MAST failure taxonomy
+- **Diagnose** - failed runs are classified against the MAST failure taxonomy
   with a diagnosis and the culprit span highlighted in the dashboard.
-- **Replay** — `agentreplay replay <run_id>` re-runs the failure locally with
+- **Replay** - `agentreplay replay <run_id>` re-runs the failure locally with
   zero live API calls. If your code diverges from the recording you get a diff.
-- **Test** — one click generates a pytest file with a fixture of the recorded
+- **Test** - one click generates a pytest file with a fixture of the recorded
   tool responses and an assertion spec (structural checks, optional LLM judge).
-- **Gate** — a GitHub Action runs those tests against every PR (live LLM calls,
+- **Gate** - a GitHub Action runs those tests against every PR (live LLM calls,
   mocked tools, N trials) and blocks the merge on regression.
 
 ## Quickstart (about 5 minutes)
